@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, errorMessage, type ImportPreview, type ImportResult } from '../api'
+import { api, errorMessage, type ImportPlan, type ImportPreview, type ImportResult } from '../api'
 import { Button, ErrorBanner, Field, PageHeader, Panel, Spinner, inputCls } from './ui'
 
 /** pick file -> preview table -> choose columns -> import -> summary */
@@ -13,6 +13,7 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
   const [sentenceMeaning, setSentenceMeaning] = useState<number | null>(null)
   const [notes, setNotes] = useState<number | null>(null)
   const [result, setResult] = useState<ImportResult | null>(null)
+  const [plan, setPlan] = useState<ImportPlan | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -45,12 +46,36 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
     }
   }
 
+  const mapping = { front, back, reading, sentence, sentence_meaning: sentenceMeaning, notes }
+
+  const apply = async (missing: 'keep' | 'remove') => {
+    if (!path) return
+    setBusy(true)
+    setError(null)
+    try {
+      setResult(await api.importCardsMissing(path, deckId, mapping, missing))
+      setPlan(null)
+    } catch (e) {
+      setError(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Look first: into an empty deck this just imports; into a deck that already has the
+  // cards it shows what would change (progress is kept) and asks about removed cards.
   const doImport = async () => {
     if (!path) return
     setBusy(true)
     setError(null)
     try {
-      setResult(await api.importCards(path, deckId, { front, back, reading, sentence, sentence_meaning: sentenceMeaning, notes }))
+      const p = await api.importPlan(path, deckId, mapping)
+      if (p.updated === 0 && p.unchanged === 0 && p.missing.length === 0) {
+        setBusy(false)
+        await apply('keep')
+        return
+      }
+      setPlan(p)
     } catch (e) {
       setError(errorMessage(e))
     } finally {
@@ -59,7 +84,14 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
   }
 
   const colSelect = (value: number | null, onChange: (v: number | null) => void, optional = false) => (
-    <select className={inputCls} value={value ?? ''} onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}>
+    <select
+      className={inputCls}
+      value={value ?? ''}
+      onChange={(e) => {
+        setPlan(null) // a new mapping needs a new plan
+        onChange(e.target.value === '' ? null : Number(e.target.value))
+      }}
+    >
       {optional && <option value="">(none)</option>}
       {preview?.columns.map((c, i) => (
         <option key={i} value={i}>{c}</option>
@@ -76,7 +108,7 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
         <p className="text-sm text-slate-600">
           Accepts <strong>.csv</strong>, <strong>.tsv</strong> and Anki's <strong>Notes in Plain Text (.txt)</strong> export.
           Anki furigana like <span className="jp">話[はな]す</span> is split into front <span className="jp">話す</span> and reading{' '}
-          <span className="jp">はなす</span> when no reading column is chosen. Cards whose front and reading already exist in the deck are skipped.
+          <span className="jp">はなす</span> when no reading column is chosen. Re-importing into a deck that already has the cards updates them in place and keeps your progress; you'll see what changes before anything is applied.
           For Japanese decks, an English back adds a meaning step, and an example sentence helps tell apart words written the same way.
         </p>
         <div className="flex items-center gap-3">
@@ -136,9 +168,12 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
               </tbody>
             </table>
           </div>
-          <Button variant="primary" onClick={doImport} disabled={busy || front === back}>
-            {busy && <Spinner />} Import {preview.total_rows} rows
-          </Button>
+          {!plan && (
+            <Button variant="primary" onClick={doImport} disabled={busy || front === back}>
+              {busy && <Spinner />} Import {preview.total_rows} rows
+            </Button>
+          )}
+          {plan && <PlanReview plan={plan} busy={busy} onApply={apply} onCancel={() => setPlan(null)} />}
           {front === back && <p className="text-xs text-rose-600">Front and back must be different columns.</p>}
         </Panel>
       )}
@@ -147,8 +182,14 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
         <Panel className="space-y-3">
           <h2 className="font-semibold">Import finished</h2>
           <ul className="text-sm">
-            <li className="text-emerald-700">{result.imported} cards imported</li>
-            <li className="text-slate-600">{result.skipped_duplicates} duplicates skipped</li>
+            <li className="text-emerald-700">{result.imported} new cards added</li>
+            {result.updated > 0 && <li className="text-slate-700">{result.updated} existing cards updated (progress kept)</li>}
+            {result.unchanged > 0 && <li className="text-slate-600">{result.unchanged} cards unchanged</li>}
+            {result.removed > 0 && <li className="text-rose-700">{result.removed} cards removed</li>}
+            {result.missing.length > 0 && result.removed === 0 && (
+              <li className="text-slate-600">{result.missing.length} cards not in the file were kept</li>
+            )}
+            <li className="text-slate-600">{result.skipped_duplicates} duplicate rows skipped</li>
           </ul>
           {result.errors.length > 0 && (
             <details className="text-sm">
@@ -166,6 +207,64 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
           </div>
         </Panel>
       )}
+    </div>
+  )
+}
+
+function PlanReview({
+  plan,
+  busy,
+  onApply,
+  onCancel,
+}: {
+  plan: ImportPlan
+  busy: boolean
+  onApply: (missing: 'keep' | 'remove') => void
+  onCancel: () => void
+}) {
+  const n = plan.missing.length
+  return (
+    <div className="space-y-3 rounded-lg border border-indigo-200 bg-indigo-50/50 p-4">
+      <h3 className="font-semibold text-slate-900">This deck already has these cards</h3>
+      <p className="text-sm text-slate-600">Cards already in the deck are updated in place. Their progress and history are kept.</p>
+      <ul className="text-sm">
+        <li className="text-emerald-700">{plan.new} new cards</li>
+        <li className="text-slate-700">{plan.updated} cards updated</li>
+        <li className="text-slate-600">{plan.unchanged} cards unchanged</li>
+        {plan.skipped_duplicates > 0 && <li className="text-slate-600">{plan.skipped_duplicates} duplicate rows skipped</li>}
+      </ul>
+      {n > 0 && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+          <p className="text-sm font-medium text-amber-900">
+            {n} {n === 1 ? 'card in this deck is' : 'cards in this deck are'} no longer in the file.
+          </p>
+          <details className="mt-2 text-sm">
+            <summary className="cursor-pointer text-amber-800">Show {n === 1 ? 'it' : 'them'}</summary>
+            <pre className="jp mt-2 max-h-56 overflow-auto whitespace-pre-wrap rounded bg-white p-2 text-xs text-slate-700">
+              {plan.missing.map((m) => `${m.front}${m.reading ? ` (${m.reading})` : ''} — ${m.back}`).join('\n')}
+            </pre>
+          </details>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {n > 0 ? (
+          <>
+            <Button variant="primary" onClick={() => onApply('keep')} disabled={busy}>
+              {busy && <Spinner />} Keep them & import
+            </Button>
+            <Button variant="danger" onClick={() => onApply('remove')} disabled={busy}>
+              Remove them & import
+            </Button>
+          </>
+        ) : (
+          <Button variant="primary" onClick={() => onApply('keep')} disabled={busy}>
+            {busy && <Spinner />} Import
+          </Button>
+        )}
+        <Button variant="ghost" onClick={onCancel} disabled={busy}>
+          Cancel import
+        </Button>
+      </div>
     </div>
   )
 }

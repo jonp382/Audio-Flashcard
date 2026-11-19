@@ -160,8 +160,12 @@ class Api:
         return self._core.import_preview(path)
 
     @_envelope
-    def import_cards(self, path, deck_id, mapping=None):
-        return self._core.import_cards(path, _id(deck_id, "deck_id"), mapping)
+    def import_plan(self, path, deck_id, mapping=None):
+        return self._core.import_plan(path, _id(deck_id, "deck_id"), mapping)
+
+    @_envelope
+    def import_cards(self, path, deck_id, mapping=None, missing="keep"):
+        return self._core.import_cards(path, _id(deck_id, "deck_id"), mapping, missing)
 
     # --- recording & review ---
     @_envelope

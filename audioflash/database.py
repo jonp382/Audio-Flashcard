@@ -148,6 +148,13 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE cards ADD COLUMN notes TEXT;
     """,
+    # 5 -> 6: keep the whole original import row (every column, e.g. Anki's audio, pitch,
+    # furigana fields) and the file's column names / Anki header, so a deck export carries
+    # everything the source file had.
+    """
+    ALTER TABLE cards ADD COLUMN source_fields TEXT;
+    ALTER TABLE decks ADD COLUMN source_info TEXT;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -248,6 +255,7 @@ def now_iso() -> str:
 
 def deck_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
+    d.pop("source_info", None)  # import bookkeeping, only used by deck export
     d["learning_steps"] = json.loads(d["learning_steps"])
     d["relearning_steps"] = json.loads(d["relearning_steps"])
     return d
@@ -257,6 +265,7 @@ def card_to_dict(row: sqlite3.Row, language: str | None = None) -> dict[str, Any
     """With the deck `language`, also adds `meaning_step` (the card is reviewed in two
     steps: reading, then meaning)."""
     d = dict(row)
+    d.pop("source_fields", None)  # the raw import row, only used by deck export
     d["alt_answers"] = json.loads(d["alt_answers"]) if d.get("alt_answers") else []
     if language is not None:
         d["meaning_step"] = has_meaning_step(language, d["back"], d["reading"])

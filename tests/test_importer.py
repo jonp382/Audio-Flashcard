@@ -109,12 +109,14 @@ def test_full_import_with_mapping(core, deck, tmp_path):
     assert cards[0]["reading"] == "ねこ"
 
 
-def test_import_skips_existing_fronts(core, deck, tmp_path):
+def test_import_matches_existing_cards(core, deck, tmp_path):
     core.create_card(deck["id"], "猫", "cat")
-    path = pick(core, write(tmp_path, "c.csv", "front,back\n猫,cat\n犬,dog\n"))
+    path = pick(core, write(tmp_path, "c.csv", "front,back\n猫,cat\n犬,dog\n犬,dog\n"))
     res = core.import_cards(path, deck["id"], None)
     assert res["imported"] == 1 and res["skipped_duplicates"] == 1
-    assert res["errors"][0]["row"] == 2  # header is row 1
+    assert res["updated"] == 1  # 猫 matched; only its stored source row is new
+    assert res["errors"][0]["row"] == 4  # the repeated 犬 row; header is row 1
+    assert len(core.list_cards(deck["id"])) == 2
 
 
 def test_import_anki_furigana_into_reading(core, deck, tmp_path):
@@ -218,3 +220,100 @@ def test_sentence_columns_optional(core, deck, tmp_path):
 )
 def test_clean_sentence(raw, clean):
     assert importer.clean_sentence(raw) == clean
+
+
+# --- re-import over an existing deck ---------------------------------------------------
+
+KAISHI_V1 = (
+    "#separator:tab\n#html:true\n"
+    "私\tわたし\tI\t\t\t<b>私</b>はアンです。\tI am Ann.\t\n"
+    "高い\tたかい\texpensive\t\t\tこの時計は<b>高い</b>。\tThis watch is expensive.\t\n"
+    "高い\tたかい\thigh, tall\t\t\tあの山は<b>高い</b>。\tThat mountain is high.\t\n"
+    "次\tつぎ\tnext\t\t\t<b>次</b>の駅。\tThe next station.\t\n"
+)
+# v2: 私 gets a better meaning + notes, 高い (expensive) gets a new meaning text,
+# 次 is gone, 猫 is new.
+KAISHI_V2 = (
+    "#separator:tab\n#html:true\n"
+    "私\tわたし\tI (polite, general)\t\t\t<b>私</b>はアンです。\tI am Ann.\tCan also be read わたくし.\n"
+    "高い\tたかい\texpensive, costly\t\t\tこの時計は<b>高い</b>。\tThis watch is expensive.\t\n"
+    "高い\tたかい\thigh, tall\t\t\tあの山は<b>高い</b>。\tThat mountain is high.\t\n"
+    "猫\tねこ\tcat\t\t\t<b>猫</b>がいる。\tThere is a cat.\t\n"
+)
+MAP = {"front": 0, "back": 2, "reading": 1, "sentence": 5, "sentence_meaning": 6, "notes": 7}
+
+
+def studied(core, card_id):
+    """Give the card some progress so we can check it survives."""
+    from audioflash.reviews import Grade, record_review
+
+    with core.db() as conn:
+        record_review(conn, core.paths, card_id, "x", Grade(3, "ok"), b"OggS", core.clock())
+    return core.get_card(card_id)
+
+
+def test_reimport_updates_in_place_and_keeps_progress(core, deck, tmp_path):
+    path = pick(core, write(tmp_path, "k1.txt", KAISHI_V1))
+    assert core.import_cards(path, deck["id"], MAP)["imported"] == 4
+    cards = {(c["front"], c["back"]): c for c in core.list_cards(deck["id"])}
+    watashi = studied(core, cards[("私", "I")]["id"])
+    expensive = studied(core, cards[("高い", "expensive")]["id"])
+    assert watashi["state"] == "learning"
+
+    path = pick(core, write(tmp_path, "k2.txt", KAISHI_V2))
+    plan = core.import_plan(path, deck["id"], MAP)
+    assert (plan["new"], plan["updated"], plan["unchanged"]) == (1, 2, 1)
+    assert [m["front"] for m in plan["missing"]] == ["次"]
+    assert len(core.list_cards(deck["id"])) == 4  # planning changes nothing
+
+    res = core.import_cards(path, deck["id"], MAP, "keep")
+    assert (res["imported"], res["updated"], res["removed"]) == (1, 2, 0)
+    after = {c["id"]: c for c in core.list_cards(deck["id"])}
+    w = after[watashi["id"]]
+    assert w["back"] == "I (polite, general)" and w["notes"] == "Can also be read わたくし."
+    for k in ("state", "due_at", "due_date", "ease_factor", "interval_days", "repetitions", "last_review"):
+        assert w[k] == watashi[k], k
+    e = after[expensive["id"]]  # meaning text changed; matched by front + reading + sentence
+    assert e["back"] == "expensive, costly" and e["state"] == expensive["state"]
+    assert len(core.list_reviews(watashi["id"])) == 1  # history kept
+    assert "次" in {c["front"] for c in after.values()}  # kept
+    assert len(after) == 5
+
+
+def test_reimport_remove_missing(core, deck, tmp_path):
+    path = pick(core, write(tmp_path, "k1.txt", KAISHI_V1))
+    core.import_cards(path, deck["id"], MAP)
+    tsugi = next(c for c in core.list_cards(deck["id"]) if c["front"] == "次")
+    studied(core, tsugi["id"])
+    assert core.paths.card_recordings(tsugi["id"]).exists()
+    path = pick(core, write(tmp_path, "k2.txt", KAISHI_V2))
+    res = core.import_cards(path, deck["id"], MAP, "remove")
+    assert res["removed"] == 1 and "removed_ids" not in res
+    assert "次" not in {c["front"] for c in core.list_cards(deck["id"])}
+    assert not core.paths.card_recordings(tsugi["id"]).exists()
+    with pytest.raises(AppError) as e:
+        core.import_cards(path, deck["id"], MAP, "delete-everything")
+    assert e.value.code == "invalid_input"
+
+
+def test_reimport_unmapped_column_never_wipes(core, deck, tmp_path):
+    path = pick(core, write(tmp_path, "k1.txt", KAISHI_V1))
+    core.import_cards(path, deck["id"], MAP)
+    no_sentence = {"front": 0, "back": 2, "reading": 1}
+    plan = core.import_plan(pick(core, write(tmp_path, "k1b.txt", KAISHI_V1)), deck["id"], no_sentence)
+    assert plan["updated"] == 0 and plan["unchanged"] == 4
+    c = next(c for c in core.list_cards(deck["id"]) if c["front"] == "私")
+    assert c["sentence"] == "<b>私</b>はアンです。"
+
+
+def test_import_keeps_whole_source_row(core, deck, tmp_path):
+    path = pick(core, write(tmp_path, "k1.txt", KAISHI_V1))
+    core.import_cards(path, deck["id"], MAP)
+    assert "source_fields" not in core.list_cards(deck["id"])[0]  # not sent to the UI
+    with core.db() as conn:
+        row = conn.execute("SELECT source_fields FROM cards WHERE front = '次'").fetchone()
+        info = conn.execute("SELECT source_info FROM decks WHERE id = ?", (deck["id"],)).fetchone()
+    import json
+
+    assert json.loads(row[0])[:3] == ["次", "つぎ", "next"]
+    assert json.loads(info[0])["meta"]["separator"] == "tab"

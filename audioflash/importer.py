@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import html
 import io
+import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -200,56 +201,232 @@ def resolve_mapping(parsed: ParsedFile, mapping: dict | None) -> dict[str, int |
     return out
 
 
-def import_into_deck(
-    conn: sqlite3.Connection, parsed: ParsedFile, deck_id: int, mapping: dict | None, now: str | None = None
-) -> dict[str, Any]:
-    m = resolve_mapping(parsed, mapping)
-    fi, bi, ri, si, smi, ni = m["front"], m["back"], m["reading"], m["sentence"], m["sentence_meaning"], m["notes"]
-    imported, dupes = 0, 0
-    errors: list[dict[str, Any]] = []
-    first_row = 2 if parsed.has_header else 1
-    with transaction(conn):
-        # The same front may appear with a different reading (方 ほう / 方 かた) or meaning
-        # (高い expensive / tall); a card is unique by front + reading + back.
-        existing = {
-            (r[0], r[1] or "", r[2])
-            for r in conn.execute("SELECT front, reading, back FROM cards WHERE deck_id = ?", (deck_id,))
+# --- import / re-import -------------------------------------------------------------
+#
+# Re-importing a file into a deck that already has its cards updates them in place
+# (schedule and history untouched), adds new rows, and reports the deck's cards that are
+# no longer in the file, which the user keeps or removes. So the deck never has to be
+# deleted to pick up new fields.
+
+CONTENT_COLUMNS = ("back", "sentence", "sentence_meaning", "notes")
+
+
+@dataclass
+class ImportRow:
+    rowno: int
+    front: str
+    back: str
+    reading: str | None
+    sentence: str | None
+    sentence_meaning: str | None
+    notes: str | None
+    source: list[str]  # the whole original row, every column, as in the file
+
+
+@dataclass
+class ImportPlan:
+    new: list[ImportRow]
+    updates: list[tuple[int, ImportRow, dict[str, Any]]]  # (card_id, row, changed fields)
+    unchanged: int
+    missing: list[dict[str, Any]]  # deck cards not in the file
+    skipped_duplicates: int
+    errors: list[dict[str, Any]]
+    mapped: set[str]  # optional columns that were mapped (only those are updated)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "new": len(self.new),
+            "updated": len(self.updates),
+            "unchanged": self.unchanged,
+            "skipped_duplicates": self.skipped_duplicates,
+            "errors": self.errors,
+            "missing": self.missing,
         }
-        base = now or now_iso()
-        for n, row in enumerate(parsed.rows):
-            rowno = first_row + n
-            front, back = clean_field(row[fi]), clean_field(row[bi])
-            reading = clean_field(row[ri]) if ri is not None else None
-            if ri is None:
-                front, furi = split_furigana(front)
-                reading = furi
-            if not front or not back:
-                errors.append({"row": rowno, "reason": "empty front or back"})
-                continue
-            key = (front, reading or "", back)
-            if key in existing:
-                dupes += 1
-                errors.append({"row": rowno, "reason": f"duplicate: {front}" + (f" ({reading})" if reading else "")})
-                continue
-            existing.add(key)
-            sentence = clean_sentence(row[si]) if si is not None else ""
-            sentence_meaning = clean_field(row[smi]) if smi is not None else ""
-            notes = clean_field(row[ni]) if ni is not None else ""
+
+
+def read_rows(parsed: ParsedFile, mapping: dict | None) -> tuple[list[ImportRow], list[dict[str, Any]], set[str]]:
+    m = resolve_mapping(parsed, mapping)
+    fi, bi, ri = m["front"], m["back"], m["reading"]
+    si, smi, ni = m["sentence"], m["sentence_meaning"], m["notes"]
+    mapped = {k for k in OPTIONAL_COLUMNS if m[k] is not None}
+    first_row = 2 if parsed.has_header else 1
+    rows: list[ImportRow] = []
+    errors: list[dict[str, Any]] = []
+    for n, row in enumerate(parsed.rows):
+        rowno = first_row + n
+        front, back = clean_field(row[fi]), clean_field(row[bi])
+        reading = clean_field(row[ri]) if ri is not None else None
+        if ri is None:
+            front, reading = split_furigana(front)
+        if not front or not back:
+            errors.append({"row": rowno, "reason": "empty front or back"})
+            continue
+        rows.append(
+            ImportRow(
+                rowno,
+                front,
+                back,
+                reading or None,
+                (clean_sentence(row[si]) or None) if si is not None else None,
+                (clean_field(row[smi]) or None) if smi is not None else None,
+                (clean_field(row[ni]) or None) if ni is not None else None,
+                list(row),
+            )
+        )
+    return rows, errors, mapped
+
+
+def _key(front: str, reading: str | None, back: str) -> tuple[str, str, str]:
+    return (front, reading or "", back)
+
+
+def plan_import(conn: sqlite3.Connection, parsed: ParsedFile, deck_id: int, mapping: dict | None) -> ImportPlan:
+    rows, errors, mapped = read_rows(parsed, mapping)
+    # Rows repeated in the file (same front + reading + back) are skipped.
+    seen: set[tuple[str, str, str]] = set()
+    unique: list[ImportRow] = []
+    dupes = 0
+    for r in rows:
+        k = _key(r.front, r.reading, r.back)
+        if k in seen:
+            dupes += 1
+            errors.append({"row": r.rowno, "reason": f"duplicate: {r.front}" + (f" ({r.reading})" if r.reading else "")})
+            continue
+        seen.add(k)
+        unique.append(r)
+
+    cards = conn.execute(
+        "SELECT id, front, reading, back, sentence, sentence_meaning, notes, source_fields FROM cards "
+        "WHERE deck_id = ? ORDER BY created_at, id",
+        (deck_id,),
+    ).fetchall()
+    by_key = {_key(c["front"], c["reading"], c["back"]): c for c in cards}
+    matched: dict[int, sqlite3.Row] = {}  # row index -> card
+    used: set[int] = set()
+
+    # Pass 1: exact front + reading + back.
+    for i, r in enumerate(unique):
+        c = by_key.get(_key(r.front, r.reading, r.back))
+        if c is not None:
+            matched[i] = c
+            used.add(c["id"])
+
+    # Pass 2: same front + reading but the meaning text changed. Match when it's the only
+    # candidate on both sides, else tell candidates apart by the example sentence.
+    groups_rows: dict[tuple[str, str], list[int]] = {}
+    for i, r in enumerate(unique):
+        if i not in matched:
+            groups_rows.setdefault((r.front, r.reading or ""), []).append(i)
+    for (front, reading), idxs in groups_rows.items():
+        cands = [c for c in cards if c["id"] not in used and c["front"] == front and (c["reading"] or "") == reading]
+        if len(cands) == 1 and len(idxs) == 1:
+            matched[idxs[0]] = cands[0]
+            used.add(cands[0]["id"])
+            continue
+        for i in idxs:
+            sent = unique[i].sentence
+            hits = [c for c in cands if c["id"] not in used and sent and c["sentence"] == sent]
+            if len(hits) == 1:
+                matched[i] = hits[0]
+                used.add(hits[0]["id"])
+
+    new: list[ImportRow] = []
+    updates: list[tuple[int, ImportRow, dict[str, Any]]] = []
+    unchanged = 0
+    for i, r in enumerate(unique):
+        c = matched.get(i)
+        if c is None:
+            new.append(r)
+            continue
+        changes: dict[str, Any] = {}
+        for col in CONTENT_COLUMNS:
+            if col != "back" and col not in mapped:
+                continue  # an unmapped column never wipes what the card has
+            if getattr(r, col) != c[col]:
+                changes[col] = getattr(r, col)
+        source = json.dumps(r.source, ensure_ascii=False)
+        if source != c["source_fields"]:
+            changes["source_fields"] = source
+        if changes:
+            updates.append((c["id"], r, changes))
+        else:
+            unchanged += 1
+
+    missing = [
+        {"card_id": c["id"], "front": c["front"], "reading": c["reading"], "back": c["back"]}
+        for c in cards
+        if c["id"] not in used
+    ]
+    return ImportPlan(new, updates, unchanged, missing, dupes, errors, mapped)
+
+
+def import_into_deck(
+    conn: sqlite3.Connection,
+    parsed: ParsedFile,
+    deck_id: int,
+    mapping: dict | None,
+    now: str | None = None,
+    missing: str = "keep",
+) -> dict[str, Any]:
+    """Apply the plan. `missing`: 'keep' or 'remove' the deck's cards not in the file.
+    Returns the summary plus `imported` (new cards), `removed` and `removed_ids`."""
+    if missing not in ("keep", "remove"):
+        raise ImportError_("missing must be 'keep' or 'remove'")
+    base = now or now_iso()
+    with transaction(conn):
+        plan = plan_import(conn, parsed, deck_id, mapping)
+        errors = list(plan.errors)
+        updated = 0
+        for card_id, r, changes in plan.updates:
+            changes = {**changes, "updated_at": base}
+            try:
+                conn.execute(
+                    f"UPDATE cards SET {', '.join(f'{k} = ?' for k in changes)} WHERE id = ?",
+                    (*changes.values(), card_id),
+                )
+                updated += 1
+            except sqlite3.IntegrityError:
+                errors.append({"row": r.rowno, "reason": f"would duplicate another card: {r.front}"})
+        for r in plan.new:
             # created_at keeps file order (queue orders new cards by created_at, id).
             conn.execute(
-                "INSERT INTO cards(deck_id, front, back, reading, sentence, sentence_meaning, notes, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO cards(deck_id, front, back, reading, sentence, sentence_meaning, notes, source_fields, "
+                "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     deck_id,
-                    front,
-                    back,
-                    reading or None,
-                    sentence or None,
-                    sentence_meaning or None,
-                    notes or None,
+                    r.front,
+                    r.back,
+                    r.reading,
+                    r.sentence,
+                    r.sentence_meaning,
+                    r.notes,
+                    json.dumps(r.source, ensure_ascii=False),
                     base,
                     base,
                 ),
             )
-            imported += 1
-    return {"imported": imported, "skipped_duplicates": dupes, "errors": errors}
+        removed_ids: list[int] = []
+        if missing == "remove" and plan.missing:
+            removed_ids = [m["card_id"] for m in plan.missing]
+            conn.executemany("DELETE FROM cards WHERE id = ?", [(i,) for i in removed_ids])
+        conn.execute(
+            "UPDATE decks SET source_info = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {"columns": parsed.columns, "meta": parsed.meta, "delimiter": parsed.delimiter},
+                    ensure_ascii=False,
+                ),
+                deck_id,
+            ),
+        )
+    out = plan.summary()
+    out.update(
+        {
+            "imported": len(plan.new),
+            "updated": updated,
+            "errors": errors,
+            "removed": len(removed_ids),
+            "removed_ids": removed_ids,
+        }
+    )
+    return out

@@ -447,14 +447,40 @@ class Core:
         except importer.ImportError_ as e:
             raise AppError("import_error", str(e)) from e
 
-    def import_cards(self, path: str, deck_id: int, mapping: dict | None) -> dict:
+    def import_plan(self, path: str, deck_id: int, mapping: dict | None) -> dict:
+        """What importing would do, without changing anything: new / updated / unchanged
+        rows and the deck's cards that are no longer in the file."""
         p = self._checked_path(path)
         with self.db() as conn:
             self._deck_or_404(conn, deck_id)
             try:
-                return importer.import_into_deck(conn, importer.parse_file(p), deck_id, mapping, to_iso(self.clock()))
+                return importer.plan_import(conn, importer.parse_file(p), deck_id, mapping).summary()
             except importer.ImportError_ as e:
                 raise AppError("import_error", str(e)) from e
+
+    def import_cards(self, path: str, deck_id: int, mapping: dict | None, missing: str = "keep") -> dict:
+        """Import or re-import. Cards already in the deck are updated in place (schedule
+        and history kept). `missing` = 'keep' or 'remove' for deck cards not in the file."""
+        if missing not in ("keep", "remove"):
+            raise AppError("invalid_input", "missing must be 'keep' or 'remove'")
+        p = self._checked_path(path)
+        with self.review_lock(), self.db() as conn:
+            self._deck_or_404(conn, deck_id)
+            try:
+                res = importer.import_into_deck(
+                    conn, importer.parse_file(p), deck_id, mapping, to_iso(self.clock()), missing
+                )
+            except importer.ImportError_ as e:
+                raise AppError("import_error", str(e)) from e
+        removed = res.pop("removed_ids")
+        if removed:
+            reviews.delete_card_dirs(self.paths, removed)
+            with self._state_lock:
+                if self._held and self._held.card_id in removed:
+                    self._held = None
+                if self._heard and self._heard.card_id in removed:
+                    self._heard = None
+        return res
 
     # --- session & recording ----------------------------------------------------------------
 

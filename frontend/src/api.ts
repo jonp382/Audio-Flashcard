@@ -232,10 +232,26 @@ export interface ImportMapping {
   notes: number | null
 }
 
-export interface ImportResult {
-  imported: number
+export interface MissingCard {
+  card_id: number
+  front: string
+  reading: string | null
+  back: string
+}
+
+/** What an import would do (import_plan), without changing anything. */
+export interface ImportPlan {
+  new: number
+  updated: number // cards already in the deck whose text changes (progress kept)
+  unchanged: number
   skipped_duplicates: number
   errors: { row: number; reason: string }[]
+  missing: MissingCard[] // deck cards no longer in the file
+}
+
+export interface ImportResult extends ImportPlan {
+  imported: number // new cards added
+  removed: number
 }
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; error: { code: ErrorCode; message: string } }
@@ -333,6 +349,10 @@ export const api = {
   importPreview: (path: string) => call<ImportPreview>('import_preview', path),
   importCards: (path: string, deckId: number, mapping: ImportMapping | null) =>
     call<ImportResult>('import_cards', path, deckId, mapping),
+  importPlan: (path: string, deckId: number, mapping: ImportMapping | null) =>
+    call<ImportPlan>('import_plan', path, deckId, mapping),
+  importCardsMissing: (path: string, deckId: number, mapping: ImportMapping | null, missing: 'keep' | 'remove') =>
+    call<ImportResult>('import_cards', path, deckId, mapping, missing),
   // session & recording
   beginSession: (deckId: number) => call<NextCard>('begin_session', deckId),
   endSession: () => call<null>('end_session'),
