@@ -32,7 +32,8 @@ MIC_TEST_MAX_SECONDS = 5.0
 NORMALIZE_PEAK = 0.9
 MAX_NORMALIZE_GAIN = 10.0
 # Clips whose overall RMS is below this never reach Whisper (hallucination guard 1).
-# Tune once on the owner's mic.
+# Checked 2026-11-18 on the owner's mic at max boost: normal speech -28 dBFS, silence
+# is digital zero (upstream noise gate), so -48 dBFS leaves ~20 dB of headroom.
 ENERGY_GATE_RMS = 0.004
 
 # --- Whisper ----------------------------------------------------------------

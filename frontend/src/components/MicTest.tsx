@@ -84,6 +84,8 @@ export function MicTest({ gain, onGainChange }: { gain: number; onGainChange: (g
     }
   }
 
+  // Meter scale is linear in dB: 0 = -60 dBFS, 1 = 0 dBFS (audio.level_from_rms).
+  const levelToDb = (l: number) => (l <= 0 ? '≤ -60' : (l * 60 - 60).toFixed(1))
   const level = rec?.level ?? 0
   const gate = result?.gate_level ?? DEFAULT_GATE
   const verdict = !result
@@ -156,6 +158,9 @@ export function MicTest({ gain, onGainChange }: { gain: number; onGainChange: (g
         {result && (
           <div className="mt-3 space-y-2">
             {verdict && <div className={`rounded-md px-3 py-2 text-sm ${verdict.cls}`}>{verdict.text}</div>}
+            <div className="text-xs tabular-nums text-slate-500">
+              Clip level {levelToDb(result.level)} dBFS · peak {result.peak.toFixed(3)} · silence cutoff {levelToDb(result.gate_level)} dBFS
+            </div>
             <div className="text-sm">
               <span className="text-slate-500">Whisper heard: </span>
               {result.transcript ? <span className="jp text-lg">{result.transcript}</span> : <span className="text-slate-500 italic">{result.transcript_note}</span>}
