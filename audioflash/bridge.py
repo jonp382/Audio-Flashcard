@@ -123,8 +123,12 @@ class Api:
         return self._core.get_card(_id(card_id, "card_id"))
 
     @_envelope
-    def create_card(self, deck_id, front, back, reading=None, alt_answers=None, sentence=None, sentence_meaning=None):
-        return self._core.create_card(_id(deck_id, "deck_id"), front, back, reading, alt_answers, sentence, sentence_meaning)
+    def create_card(
+        self, deck_id, front, back, reading=None, alt_answers=None, sentence=None, sentence_meaning=None, notes=None
+    ):
+        return self._core.create_card(
+            _id(deck_id, "deck_id"), front, back, reading, alt_answers, sentence, sentence_meaning, notes
+        )
 
     @_envelope
     def update_card(self, card_id, patch):

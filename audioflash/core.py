@@ -23,7 +23,7 @@ import numpy as np
 
 from . import audio, config, database, importer, reading_match, reviews, scheduler, srs
 from .errors import AppError
-from .evaluator import GradingFailed, LLMUnavailable, OllamaClient
+from .evaluator import CardContext, GradingFailed, LLMUnavailable, OllamaClient
 from .grading import grade_answer, grade_meaning
 from .model_setup import ModelDownloader
 from .paths import DataPaths
@@ -32,7 +32,7 @@ from .timeutil import to_iso, utc_now
 
 log = logging.getLogger(__name__)
 
-CONTENT_FIELDS = ("front", "back", "reading", "alt_answers", "sentence", "sentence_meaning")
+CONTENT_FIELDS = ("front", "back", "reading", "alt_answers", "sentence", "sentence_meaning", "notes")
 
 
 @dataclass
@@ -320,11 +320,13 @@ class Core:
         alt_answers: list | None = None,
         sentence: str | None = None,
         sentence_meaning: str | None = None,
+        notes: str | None = None,
     ) -> dict:
         front, back = _req_str(front, "front"), _req_str(back, "back")
         reading = _opt_str(reading, "reading")
         sentence = _opt_str(sentence, "sentence")
         sentence_meaning = _opt_str(sentence_meaning, "sentence_meaning")
+        notes = _opt_str(notes, "notes")
         alts = _alt_answers(alt_answers)
         now = to_iso(self.clock())
         with self.db() as conn:
@@ -332,9 +334,20 @@ class Core:
             try:
                 with database.transaction(conn):
                     cur = conn.execute(
-                        "INSERT INTO cards(deck_id, front, back, reading, alt_answers, sentence, sentence_meaning, "
-                        "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                        (deck_id, front, back, reading, json.dumps(alts) if alts else None, sentence, sentence_meaning, now, now),
+                        "INSERT INTO cards(deck_id, front, back, reading, alt_answers, sentence, sentence_meaning, notes, "
+                        "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            deck_id,
+                            front,
+                            back,
+                            reading,
+                            json.dumps(alts) if alts else None,
+                            sentence,
+                            sentence_meaning,
+                            notes,
+                            now,
+                            now,
+                        ),
                     )
             except sqlite3.IntegrityError as e:
                 raise AppError("invalid_input", DUPLICATE_CARD) from e
@@ -347,7 +360,7 @@ class Core:
         for k, v in patch.items():
             if k in ("front", "back"):
                 sets[k] = _req_str(v, k)
-            elif k in ("reading", "sentence", "sentence_meaning"):
+            elif k in ("reading", "sentence", "sentence_meaning", "notes"):
                 sets[k] = _opt_str(v, k)
             elif k == "alt_answers":
                 alts = _alt_answers(v)
@@ -621,8 +634,7 @@ class Core:
                     card["reading"],
                     alts,
                     self.ollama,
-                    card["sentence"],
-                    card["sentence_meaning"],
+                    CardContext.from_card(card),
                 )
             else:
                 # Two-step card: reading by the deterministic match, meaning by the LLM.
@@ -633,8 +645,7 @@ class Core:
                     card["back"],
                     card["reading"],
                     self.ollama,
-                    card["sentence"],
-                    card["sentence_meaning"],
+                    CardContext.from_card(card),
                 )
                 steps = [
                     reviews.StepResult("reading", reading.transcript, rg),

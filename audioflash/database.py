@@ -144,6 +144,10 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_cards_due_at ON cards (deck_id, state, due_at);
     CREATE UNIQUE INDEX idx_cards_identity ON cards (deck_id, front, COALESCE(reading, ''), back);
     """,
+    # 4 -> 5: the deck author's notes on a card, sent to the meaning grader as context.
+    """
+    ALTER TABLE cards ADD COLUMN notes TEXT;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

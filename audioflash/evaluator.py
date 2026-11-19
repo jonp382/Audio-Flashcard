@@ -64,6 +64,10 @@ Scores:
     Judge whether the learner understood the meaning, not whether they used the same words: an
     answer that explains the meaning or its use in other words is correct.
 
+Card notes, when given, are the deck author's explanation of the word. An answer that matches
+the notes' description of the meaning is correct even if the expected answer is worded poorly
+(e.g. expected "san" with notes "polite honorific": "honorific" is correct).
+
 When an example sentence is given, the card's word is marked with <b>...</b>. Use the sentence
 to see which sense of the word the card is about: a word with several senses (高い = expensive,
 or high/tall) is graded against the sense the expected answer and the sentence use.
@@ -73,23 +77,38 @@ expected answer, and when there is a mistake, name it specifically. Then give th
 matches your feedback. Reply only with the JSON object."""
 
 
+@dataclass(frozen=True)
+class CardContext:
+    """Extra card fields that help the LLM judge which sense of a word is meant."""
+
+    sentence: str | None = None
+    sentence_meaning: str | None = None
+    notes: str | None = None
+
+    @classmethod
+    def from_card(cls, card: Any) -> "CardContext":
+        return cls(card["sentence"], card["sentence_meaning"], card["notes"])
+
+
 def build_messages(
     front: str,
     back: str,
     reading: str | None,
     language: str,
     transcript: str,
-    sentence: str | None = None,
-    sentence_meaning: str | None = None,
+    context: CardContext | None = None,
 ) -> list[dict[str, str]]:
+    ctx = context or CardContext()
     lines = [
         f"Card prompt (front): {front}",
         f"Expected answer (back): {back}",
     ]
     if reading:
         lines.append(f"Reading: {reading}")
-    if sentence:
-        lines.append(f"Example sentence: {sentence}" + (f" ({sentence_meaning})" if sentence_meaning else ""))
+    if ctx.sentence:
+        lines.append(f"Example sentence: {ctx.sentence}" + (f" ({ctx.sentence_meaning})" if ctx.sentence_meaning else ""))
+    if ctx.notes:
+        lines.append(f"Card notes: {ctx.notes}")
     if language == "en":
         lines.append("Task: the learner saw the card prompt and said its meaning in English.")
     else:
@@ -219,14 +238,13 @@ class OllamaClient:
         reading: str | None,
         language: str,
         transcript: str,
-        sentence: str | None = None,
-        sentence_meaning: str | None = None,
+        context: CardContext | None = None,
     ) -> LLMGrade:
         if not self.status.checked or not self.ready:
             self.check()
         if not self.ready:
             raise LLMUnavailable("ollama is not running or the model is missing")
-        payload = self.chat_payload(build_messages(front, back, reading, language, transcript, sentence, sentence_meaning))
+        payload = self.chat_payload(build_messages(front, back, reading, language, transcript, context))
         try:
             with self._client() as c:
                 r = c.post("/api/chat", json=payload)

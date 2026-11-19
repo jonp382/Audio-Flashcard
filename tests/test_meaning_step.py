@@ -278,3 +278,18 @@ def test_en_deck_grader_gets_example_sentence(api, core, stream_factory, fake_mo
     ok(say(api, stream_factory, fake_model, c["id"], "expensive"))
     body = [b for p, b in ollama_fake.requests if p == "/api/chat"][-1]
     assert "Example sentence: この時計は<b>高い</b>。 (This watch is expensive.)" in body["messages"][1]["content"]
+
+
+def test_meaning_grader_gets_card_notes(api, core, stream_factory, fake_model, ollama_fake, ja2):
+    """さん: the deck's meaning is just "san"; the notes say what it is."""
+    d, _ = ja2
+    c = ok(api.create_card(d["id"], "さん", "san", "さん", [], None, None, "Most commonplace neutral polite honorific."))
+    assert c["notes"] == "Most commonplace neutral polite honorific."
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "さん"))
+    ok(say(api, stream_factory, fake_model, c["id"], "honorific", "meaning"))
+    body = [b for p, b in ollama_fake.requests if p == "/api/chat"][-1]
+    assert "Card notes: Most commonplace neutral polite honorific." in body["messages"][1]["content"]
+    assert "Card notes" in body["messages"][0]["content"]
+    ok(api.update_card(c["id"], {"notes": "  "}))
+    assert ok(api.get_card(c["id"]))["notes"] is None

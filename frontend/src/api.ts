@@ -61,6 +61,7 @@ export interface Card {
   alt_answers: string[]
   sentence: string | null // example sentence; the card's word may be wrapped in <b>…</b>
   sentence_meaning: string | null // its translation (shown only after answering)
+  notes: string | null // deck author's notes; grader context, shown after answering
   state: CardStateName
   learning_step: number | null
   ease_factor: number
@@ -210,6 +211,7 @@ export interface ImportMapping {
   reading: number | null
   sentence: number | null
   sentence_meaning: number | null
+  notes: number | null
 }
 
 export interface ImportResult {
@@ -296,10 +298,11 @@ export const api = {
     altAnswers: string[],
     sentence: string | null = null,
     sentenceMeaning: string | null = null,
-  ) => call<Card>('create_card', deckId, front, back, reading, altAnswers, sentence, sentenceMeaning),
+    notes: string | null = null,
+  ) => call<Card>('create_card', deckId, front, back, reading, altAnswers, sentence, sentenceMeaning, notes),
   updateCard: (
     cardId: number,
-    patch: Partial<Pick<Card, 'front' | 'back' | 'reading' | 'alt_answers' | 'sentence' | 'sentence_meaning'>>,
+    patch: Partial<Pick<Card, 'front' | 'back' | 'reading' | 'alt_answers' | 'sentence' | 'sentence_meaning' | 'notes'>>,
   ) =>
     call<Card>('update_card', cardId, patch),
   deleteCard: (cardId: number) => call<null>('delete_card', cardId),

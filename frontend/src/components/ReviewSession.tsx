@@ -425,6 +425,7 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
               </div>
             )}
             {phase === 'result' && card.sentence_meaning && <div className="mt-1 text-sm text-slate-500">{card.sentence_meaning}</div>}
+            {phase === 'result' && card.notes && <div className="mx-auto mt-3 max-w-xl text-sm italic text-slate-500">{card.notes}</div>}
             {askMeaning && phase !== 'result' && heard !== null && (
               <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-slate-600">
                 <span className="text-sm text-slate-400">Reading heard:</span>

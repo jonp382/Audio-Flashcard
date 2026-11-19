@@ -40,7 +40,7 @@ def test_header_row_detected():
     p = parse_text("front,back,reading\n話す,to speak,はなす\n")
     assert p.has_header and p.columns == ["front", "back", "reading"]
     assert importer.resolve_mapping(p, None) == {
-        "front": 0, "back": 1, "reading": 2, "sentence": None, "sentence_meaning": None
+        "front": 0, "back": 1, "reading": 2, "sentence": None, "sentence_meaning": None, "notes": None
     }
 
 
@@ -177,7 +177,8 @@ def test_kaishi_style_same_front_two_readings_with_sentences(core, deck, tmp_pat
     # Rows shaped like Kaishi 1.5k: word, reading, meaning, furigana, audio, sentence, translation
     text = (
         "#separator:tab\n#html:true\n"
-        "方\tほう\tdirection, side\t方[ほう]\t[sound:a.mp3]\t彼は私の<b>方</b>を見ました。\tHe looked in my direction.\n"
+        "方\tほう\tdirection, side\t方[ほう]\t[sound:a.mp3]\t彼は私の<b>方</b>を見ました。\tHe looked in my direction.\t\n"
+        "さん\tさん\tsan\t\t\t\t\t\"Polite honorific.<br>Like \"\"M.\"\" in English.\"\n"
         "方\tかた\tperson (polite form)\t方[かた]\t[sound:b.mp3]\t次の<b>方</b>、どうぞ。\tThe next person, please.\n"
         "方\tかた\tperson (polite form)\t\t\t\t\n"
         "高い\tたかい\texpensive\t\t\tこの時計は<b>高い</b>。\tThis watch is expensive.\n"
@@ -185,11 +186,13 @@ def test_kaishi_style_same_front_two_readings_with_sentences(core, deck, tmp_pat
     )
     path = pick(core, write(tmp_path, "kaishi.txt", text))
     res = core.import_cards(
-        path, deck["id"], {"front": 0, "back": 2, "reading": 1, "sentence": 5, "sentence_meaning": 6}
+        path, deck["id"], {"front": 0, "back": 2, "reading": 1, "sentence": 5, "sentence_meaning": 6, "notes": 7}
     )
-    assert res["imported"] == 4 and res["skipped_duplicates"] == 1
+    assert res["imported"] == 5 and res["skipped_duplicates"] == 1
     assert res["errors"][0]["reason"] == "duplicate: 方 (かた)"
-    a, b, t1, t2 = core.list_cards(deck["id"])
+    a, san, b, t1, t2 = core.list_cards(deck["id"])
+    assert san["notes"] == 'Polite honorific. Like "M." in English.'
+    assert a["notes"] is None
     assert (t1["back"], t2["back"]) == ("expensive", "high, tall")
     assert (a["front"], a["reading"], a["back"]) == ("方", "ほう", "direction, side")
     assert (b["front"], b["reading"], b["back"]) == ("方", "かた", "person (polite form)")

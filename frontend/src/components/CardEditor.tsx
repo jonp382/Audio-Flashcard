@@ -10,9 +10,10 @@ interface Draft {
   alts: string // one per line
   sentence: string
   sentenceMeaning: string
+  notes: string
 }
 
-const empty: Draft = { front: '', back: '', reading: '', alts: '', sentence: '', sentenceMeaning: '' }
+const empty: Draft = { front: '', back: '', reading: '', alts: '', sentence: '', sentenceMeaning: '', notes: '' }
 
 function toDraft(c: Card): Draft {
   return {
@@ -22,6 +23,7 @@ function toDraft(c: Card): Draft {
     alts: c.alt_answers.join('\n'),
     sentence: c.sentence ?? '',
     sentenceMeaning: c.sentence_meaning ?? '',
+    notes: c.notes ?? '',
   }
 }
 
@@ -74,9 +76,10 @@ export function CardEditor({ deckId, onBack }: { deckId: number; onBack: () => v
     const reading = draft.reading.trim() || null
     const sentence = draft.sentence.trim() || null
     const sentenceMeaning = draft.sentenceMeaning.trim() || null
+    const notes = draft.notes.trim() || null
     try {
       if (editing === 'new') {
-        await api.createCard(deckId, draft.front, draft.back, reading, alt, sentence, sentenceMeaning)
+        await api.createCard(deckId, draft.front, draft.back, reading, alt, sentence, sentenceMeaning, notes)
       } else if (typeof editing === 'number') {
         await api.updateCard(editing, {
           front: draft.front,
@@ -85,6 +88,7 @@ export function CardEditor({ deckId, onBack }: { deckId: number; onBack: () => v
           alt_answers: alt,
           sentence,
           sentence_meaning: sentenceMeaning,
+          notes,
         })
       }
       await load()
@@ -191,6 +195,9 @@ export function CardEditor({ deckId, onBack }: { deckId: number; onBack: () => v
               </Field>
               <Field label="Sentence translation (optional)" hint="Shown only after you answer.">
                 <input className={inputCls} value={draft.sentenceMeaning} onChange={(e) => setDraft({ ...draft, sentenceMeaning: e.target.value })} />
+              </Field>
+              <Field label="Notes (optional)" hint="Extra explanation of the word. The meaning grader reads it, and it is shown after you answer.">
+                <textarea className={`${inputCls} jp`} rows={2} value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />
               </Field>
               <div className="flex flex-wrap gap-2">
                 <Button variant="primary" onClick={() => save(false)} disabled={!draft.front.trim() || !draft.back.trim()}>Save</Button>

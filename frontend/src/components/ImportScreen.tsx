@@ -11,6 +11,7 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
   const [reading, setReading] = useState<number | null>(null)
   const [sentence, setSentence] = useState<number | null>(null)
   const [sentenceMeaning, setSentenceMeaning] = useState<number | null>(null)
+  const [notes, setNotes] = useState<number | null>(null)
   const [result, setResult] = useState<ImportResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -37,6 +38,8 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
       setReading(r >= 0 ? r : null)
       setSentence(s >= 0 ? s : null)
       setSentenceMeaning(sm >= 0 ? sm : null)
+      const n = find('notes', 'note', 'comment')
+      setNotes(n >= 0 ? n : null)
     } catch (e) {
       setError(errorMessage(e))
     }
@@ -47,7 +50,7 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
     setBusy(true)
     setError(null)
     try {
-      setResult(await api.importCards(path, deckId, { front, back, reading, sentence, sentence_meaning: sentenceMeaning }))
+      setResult(await api.importCards(path, deckId, { front, back, reading, sentence, sentence_meaning: sentenceMeaning, notes }))
     } catch (e) {
       setError(errorMessage(e))
     } finally {
@@ -94,6 +97,7 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
             <Field label="Reading column">{colSelect(reading, setReading, true)}</Field>
             <Field label="Example sentence column">{colSelect(sentence, setSentence, true)}</Field>
             <Field label="Sentence translation column">{colSelect(sentenceMeaning, setSentenceMeaning, true)}</Field>
+            <Field label="Notes column">{colSelect(notes, setNotes, true)}</Field>
           </div>
           <div className="max-h-80 overflow-auto rounded-lg border border-slate-200">
             <table className="w-full text-sm">
@@ -113,7 +117,9 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
                                 ? '· sentence'
                                 : i === sentenceMeaning
                                   ? '· translation'
-                                  : ''}
+                                  : i === notes
+                                    ? '· notes'
+                                    : ''}
                       </span>
                     </th>
                   ))}
@@ -123,7 +129,7 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
                 {preview.rows.map((r, i) => (
                   <tr key={i} className="border-t border-slate-100">
                     {r.map((cell, j) => (
-                      <td key={j} className={`jp px-3 py-1.5 ${[front, back, reading, sentence, sentenceMeaning].includes(j) ? '' : 'text-slate-400'}`}>{cell}</td>
+                      <td key={j} className={`jp px-3 py-1.5 ${[front, back, reading, sentence, sentenceMeaning, notes].includes(j) ? '' : 'text-slate-400'}`}>{cell}</td>
                     ))}
                   </tr>
                 ))}

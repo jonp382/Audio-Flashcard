@@ -169,11 +169,11 @@ def preview(parsed: ParsedFile, n: int = 10) -> dict[str, Any]:
     }
 
 
-OPTIONAL_COLUMNS = ("reading", "sentence", "sentence_meaning")
+OPTIONAL_COLUMNS = ("reading", "sentence", "sentence_meaning", "notes")
 
 
 def resolve_mapping(parsed: ParsedFile, mapping: dict | None) -> dict[str, int | None]:
-    """-> {"front": i, "back": i, "reading": i|None, "sentence": i|None, "sentence_meaning": i|None}"""
+    """-> {"front": i, "back": i} plus each of OPTIONAL_COLUMNS as i|None"""
     if mapping is None:
         lower = [c.strip().lower() for c in parsed.columns]
         if "front" in lower and "back" in lower:
@@ -204,7 +204,7 @@ def import_into_deck(
     conn: sqlite3.Connection, parsed: ParsedFile, deck_id: int, mapping: dict | None, now: str | None = None
 ) -> dict[str, Any]:
     m = resolve_mapping(parsed, mapping)
-    fi, bi, ri, si, smi = m["front"], m["back"], m["reading"], m["sentence"], m["sentence_meaning"]
+    fi, bi, ri, si, smi, ni = m["front"], m["back"], m["reading"], m["sentence"], m["sentence_meaning"], m["notes"]
     imported, dupes = 0, 0
     errors: list[dict[str, Any]] = []
     first_row = 2 if parsed.has_header else 1
@@ -234,11 +234,22 @@ def import_into_deck(
             existing.add(key)
             sentence = clean_sentence(row[si]) if si is not None else ""
             sentence_meaning = clean_field(row[smi]) if smi is not None else ""
+            notes = clean_field(row[ni]) if ni is not None else ""
             # created_at keeps file order (queue orders new cards by created_at, id).
             conn.execute(
-                "INSERT INTO cards(deck_id, front, back, reading, sentence, sentence_meaning, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?)",
-                (deck_id, front, back, reading or None, sentence or None, sentence_meaning or None, base, base),
+                "INSERT INTO cards(deck_id, front, back, reading, sentence, sentence_meaning, notes, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    deck_id,
+                    front,
+                    back,
+                    reading or None,
+                    sentence or None,
+                    sentence_meaning or None,
+                    notes or None,
+                    base,
+                    base,
+                ),
             )
             imported += 1
     return {"imported": imported, "skipped_duplicates": dupes, "errors": errors}

@@ -11,7 +11,7 @@ export function createMockApi(): PyApi {
     { id: 2, name: 'Kanji meanings', language: 'en', new_per_day: 20, reviews_per_day: 200, learning_steps: [1, 10], relearning_steps: [10], created_at: now() },
   ]
   const mk = (deck_id: number, front: string, back: string, reading: string | null): Card => ({
-    id: ++ids, deck_id, front, back, reading, alt_answers: [], sentence: null, sentence_meaning: null, state: 'new', learning_step: null, ease_factor: 2.5,
+    id: ++ids, deck_id, front, back, reading, alt_answers: [], sentence: null, sentence_meaning: null, notes: null, state: 'new', learning_step: null, ease_factor: 2.5,
     interval_days: 0, repetitions: 0, due_date: null, due_at: null, last_review: null, created_at: now(), updated_at: now(),
     meaning_step: deck_id === 1 && !!reading && /[A-Za-z]/.test(back),
   })
