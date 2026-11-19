@@ -613,11 +613,29 @@ class Core:
         try:
             if reading is None:
                 front = ja_front if language == "ja" else card["front"]
-                grade = grade_answer(language, transcript, front, card["back"], card["reading"], alts, self.ollama)
+                grade = grade_answer(
+                    language,
+                    transcript,
+                    front,
+                    card["back"],
+                    card["reading"],
+                    alts,
+                    self.ollama,
+                    card["sentence"],
+                    card["sentence_meaning"],
+                )
             else:
                 # Two-step card: reading by the deterministic match, meaning by the LLM.
                 rg = grade_answer("ja", reading.transcript, ja_front, card["back"], card["reading"], alts, self.ollama)
-                mg = grade_meaning(transcript, card["front"], card["back"], card["reading"], self.ollama)
+                mg = grade_meaning(
+                    transcript,
+                    card["front"],
+                    card["back"],
+                    card["reading"],
+                    self.ollama,
+                    card["sentence"],
+                    card["sentence_meaning"],
+                )
                 steps = [
                     reviews.StepResult("reading", reading.transcript, rg),
                     reviews.StepResult("meaning", transcript, mg),

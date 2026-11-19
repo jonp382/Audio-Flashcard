@@ -245,3 +245,36 @@ def test_unique_front_keeps_kanji_shortcut(api, core, stream_factory, fake_model
     ok(say(api, stream_factory, fake_model, c["id"], "食べる"))
     r = ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))
     assert r["steps"][0]["score"] == 3
+
+
+def test_meaning_grader_gets_example_sentence(api, core, stream_factory, fake_model, ollama_fake, ja2):
+    """人 じん 'person from (nationality)': the sentence shows which sense is meant."""
+    d, _ = ja2
+    c = ok(api.create_card(d["id"], "人", "person from (nationality)", "じん", [], "私はイギリス<b>人</b>です。", "I am British."))
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "じん"))
+    ok(say(api, stream_factory, fake_model, c["id"], "of a nationality", "meaning"))
+    body = [b for p, b in ollama_fake.requests if p == "/api/chat"][-1]
+    user = body["messages"][1]["content"]
+    assert "Expected answer (back): person from (nationality)" in user
+    assert "Example sentence: 私はイギリス<b>人</b>です。 (I am British.)" in user
+    system = body["messages"][0]["content"]
+    assert "placeholder" in system and "not whether they used the same words" in system
+
+
+def test_no_sentence_line_without_sentence(api, core, stream_factory, fake_model, ollama_fake, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "たべる"))
+    ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))
+    body = [b for p, b in ollama_fake.requests if p == "/api/chat"][-1]
+    assert "Example sentence" not in body["messages"][1]["content"]
+
+
+def test_en_deck_grader_gets_example_sentence(api, core, stream_factory, fake_model, ollama_fake):
+    d = ok(api.create_deck("EN", "en"))
+    c = ok(api.create_card(d["id"], "高い", "expensive", None, [], "この時計は<b>高い</b>。", "This watch is expensive."))
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "expensive"))
+    body = [b for p, b in ollama_fake.requests if p == "/api/chat"][-1]
+    assert "Example sentence: この時計は<b>高い</b>。 (This watch is expensive.)" in body["messages"][1]["content"]

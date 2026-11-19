@@ -42,9 +42,9 @@ GRADE_SCHEMA: dict[str, Any] = {
 }
 
 SYSTEM_PROMPT = """You grade a language learner's spoken flashcard answer.
-You receive the card's prompt (front), the expected answer (back), optionally a reading,
-the language the answer was spoken in, and a speech-to-text transcript of what the learner said.
-Judge only from the transcript. Fillers and pauses are removed by speech recognition, so do not
+You receive the card's prompt (front), the expected answer (back), optionally a reading and an
+example sentence, the language the answer was spoken in, and a speech-to-text transcript of what
+the learner said. Judge only from the transcript. Fillers and pauses are removed by speech recognition, so do not
 judge fluency or hesitation.
 
 Scores:
@@ -56,20 +56,36 @@ Scores:
     Differences in writing system (kana / kanji / romaji), capitalization and punctuation
     are NOT errors.
     If the expected answer lists several meanings (separated by commas or semicolons), any ONE
-    of them is fully correct. Text in parentheses in the expected answer is a usage note that the
-    learner does not need to say.
+    of them is fully correct. Text in parentheses in the expected answer may be a usage note
+    ("polite form") that the learner need not say, or a placeholder ("person from (country)").
+    Judge whether the learner understood the meaning, not whether they used the same words: an
+    answer that explains the meaning or its use in other words is correct.
+
+When an example sentence is given, the card's word is marked with <b>...</b>. Use the sentence
+to see which sense of the word the card is about: a word with several senses (高い = expensive,
+or high/tall) is graded against the sense the expected answer and the sentence use.
 
 Write the feedback in English, 1-2 short sentences. When there is a mistake, name it
 specifically. Reply only with the JSON object."""
 
 
-def build_messages(front: str, back: str, reading: str | None, language: str, transcript: str) -> list[dict[str, str]]:
+def build_messages(
+    front: str,
+    back: str,
+    reading: str | None,
+    language: str,
+    transcript: str,
+    sentence: str | None = None,
+    sentence_meaning: str | None = None,
+) -> list[dict[str, str]]:
     lines = [
         f"Card prompt (front): {front}",
         f"Expected answer (back): {back}",
     ]
     if reading:
         lines.append(f"Reading: {reading}")
+    if sentence:
+        lines.append(f"Example sentence: {sentence}" + (f" ({sentence_meaning})" if sentence_meaning else ""))
     lines.append(f"Answer language: {'English' if language == 'en' else 'Japanese'}")
     lines.append(f"Transcript of learner's answer: {transcript}")
     return [
@@ -189,12 +205,21 @@ class OllamaClient:
             payload["think"] = False
         return payload
 
-    def grade(self, front: str, back: str, reading: str | None, language: str, transcript: str) -> LLMGrade:
+    def grade(
+        self,
+        front: str,
+        back: str,
+        reading: str | None,
+        language: str,
+        transcript: str,
+        sentence: str | None = None,
+        sentence_meaning: str | None = None,
+    ) -> LLMGrade:
         if not self.status.checked or not self.ready:
             self.check()
         if not self.ready:
             raise LLMUnavailable("ollama is not running or the model is missing")
-        payload = self.chat_payload(build_messages(front, back, reading, language, transcript))
+        payload = self.chat_payload(build_messages(front, back, reading, language, transcript, sentence, sentence_meaning))
         try:
             with self._client() as c:
                 r = c.post("/api/chat", json=payload)
