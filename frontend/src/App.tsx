@@ -8,6 +8,7 @@ import { ReviewSession } from './components/ReviewSession'
 import { SettingsPage } from './components/SettingsPage'
 import { SetupWizard } from './components/SetupWizard'
 import { Spinner } from './components/ui'
+import { WeakSpots } from './components/WeakSpots'
 
 type View =
   | { name: 'decks' }
@@ -15,6 +16,7 @@ type View =
   | { name: 'cards'; deckId: number }
   | { name: 'deck-settings'; deckId: number }
   | { name: 'import'; deck: Deck }
+  | { name: 'weak'; deck: Deck }
   | { name: 'settings' }
   | { name: 'setup'; ollamaOnly: boolean; back: View }
 
@@ -81,6 +83,9 @@ export default function App() {
     case 'import':
       body = <ImportScreen deckId={view.deck.id} deckName={view.deck.name} onBack={goDecks} onDone={() => setView({ name: 'cards', deckId: view.deck.id })} />
       break
+    case 'weak':
+      body = <WeakSpots deck={view.deck} onBack={goDecks} />
+      break
     case 'settings':
       body = <SettingsPage status={status} onBack={goDecks} onOpenSetup={openSetup} />
       break
@@ -91,6 +96,7 @@ export default function App() {
           onCards={(d) => setView({ name: 'cards', deckId: d.id })}
           onSettings={(d) => setView({ name: 'deck-settings', deckId: d.id })}
           onImport={(d) => setView({ name: 'import', deck: d })}
+          onWeakSpots={(d) => setView({ name: 'weak', deck: d })}
         />
       )
   }

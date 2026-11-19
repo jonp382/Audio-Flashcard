@@ -15,7 +15,7 @@ import threading
 import webbrowser
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -806,6 +806,73 @@ class Core:
                 }
                 for r in rows
             ]
+
+    def get_weak_spots(self, deck_id: int, days: int = 30) -> dict:
+        """Where two-step answers go wrong, from `reviews.steps` (scores after overrides).
+        `days` = 0 means all history. A step counts as missed below score 2."""
+        if isinstance(days, bool) or not isinstance(days, int) or not 0 <= days <= 3650:
+            raise AppError("invalid_input", "days must be a whole number 0-3650")
+        with self.db() as conn:
+            self._deck_or_404(conn, deck_id)
+            since = to_iso(self.clock() - timedelta(days=days)) if days else ""
+            rows = conn.execute(
+                "SELECT r.card_id, r.reviewed_at, json_extract(s.value, '$.step') AS step, "
+                "json_extract(s.value, '$.score') AS score "
+                "FROM reviews r, json_each(r.steps) s "
+                "WHERE r.deck_id = ? AND r.steps IS NOT NULL AND r.reviewed_at >= ? "
+                "ORDER BY r.id",
+                (deck_id, since),
+            ).fetchall()
+            totals = {st: {"answers": 0, "correct": 0} for st in STEPS}
+            per_card: dict[int, dict[str, Any]] = {}
+            for r in rows:
+                st = r["step"]
+                if st not in totals:
+                    continue
+                ok = r["score"] >= 2
+                totals[st]["answers"] += 1
+                totals[st]["correct"] += int(ok)
+                c = per_card.setdefault(
+                    r["card_id"],
+                    {"answers": 0, "reading_misses": 0, "meaning_misses": 0, "last_missed_at": None, "last": {}},
+                )
+                if st == "reading":
+                    c["answers"] += 1  # one reading per two-step review
+                if not ok:
+                    c[f"{st}_misses"] += 1
+                    c["last_missed_at"] = r["reviewed_at"]
+                c["last"][st] = r["score"]  # rows are in review order, so this ends on the latest
+            missed = [cid for cid, c in per_card.items() if c["reading_misses"] or c["meaning_misses"]]
+            cards_by_id = {}
+            if missed:
+                q = ",".join("?" * len(missed))
+                cards_by_id = {
+                    r["id"]: r for r in conn.execute(f"SELECT id, front, reading, back FROM cards WHERE id IN ({q})", missed)
+                }
+        out_cards = []
+        for cid in missed:
+            card = cards_by_id.get(cid)
+            if card is None:
+                continue
+            c = per_card[cid]
+            out_cards.append(
+                {
+                    "card_id": cid,
+                    "front": card["front"],
+                    "reading": card["reading"],
+                    "back": card["back"],
+                    "answers": c["answers"],
+                    "reading_misses": c["reading_misses"],
+                    "meaning_misses": c["meaning_misses"],
+                    "last_missed_at": c["last_missed_at"],
+                    # latest answer right for every step = probably learned since
+                    "recovered": all(v >= 2 for v in c["last"].values()),
+                }
+            )
+        # Not-yet-recovered first, then most misses; ties: most recently missed first.
+        out_cards.sort(key=lambda c: c["last_missed_at"] or "", reverse=True)
+        out_cards.sort(key=lambda c: (c["recovered"], -(c["reading_misses"] + c["meaning_misses"])))
+        return {"days": days, "steps": totals, "cards": out_cards[:100]}
 
     def list_recordings(self, card_id: int) -> list[dict]:
         with self.db() as conn:

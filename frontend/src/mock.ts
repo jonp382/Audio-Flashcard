@@ -103,6 +103,10 @@ export function createMockApi(): PyApi {
     undo_last_review: () => { const last = [...done].pop(); if (last === undefined) return fail('not_found', 'Nothing to undo'); done.delete(last); return ok({ card_id: last, deck_id: cards.find((c) => c.id === last)!.deck_id }) },
     list_reviews: () => ok([]),
     list_recordings: () => ok([]),
+    get_weak_spots: (_id: number, days: number) => ok({ days, steps: { reading: { answers: 40, correct: 31 }, meaning: { answers: 40, correct: 36 } }, cards: [
+      { card_id: 1, front: '方', reading: 'かた', back: 'person (polite form)', answers: 4, reading_misses: 3, meaning_misses: 0, last_missed_at: now(), recovered: false },
+      { card_id: 2, front: '合う', reading: 'あう', back: 'to match', answers: 5, reading_misses: 2, meaning_misses: 1, last_missed_at: now(), recovered: true },
+    ] }),
     play_recording: () => ok(),
     stop_playback: () => ok(),
   }

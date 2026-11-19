@@ -293,3 +293,60 @@ def test_meaning_grader_gets_card_notes(api, core, stream_factory, fake_model, o
     assert "Card notes" in body["messages"][0]["content"]
     ok(api.update_card(c["id"], {"notes": "  "}))
     assert ok(api.get_card(c["id"]))["notes"] is None
+
+
+# --- weak spots -------------------------------------------------------------------------
+
+
+def two_step(api, stream_factory, fake_model, ollama_fake, card_id, reading_said, meaning_score):
+    ok(say(api, stream_factory, fake_model, card_id, reading_said))
+    ollama_fake.reply = {"feedback": "fb", "score": meaning_score}
+    return ok(say(api, stream_factory, fake_model, card_id, "x", "meaning"))
+
+
+def test_weak_spots(api, core, stream_factory, fake_model, ollama_fake, clock, ja, ja2):
+    d, eat = ja2
+    drink = ok(api.create_card(d["id"], "飲む", "to drink", "のむ"))
+    see = ok(api.create_card(d["id"], "見る", "to see", "みる"))
+    ok(api.begin_session(d["id"]))
+    # 食べる: reading missed twice, then right
+    two_step(api, stream_factory, fake_model, ollama_fake, eat["id"], "のむ", 3)
+    clock.advance(minutes=1)
+    two_step(api, stream_factory, fake_model, ollama_fake, eat["id"], "のむ", 3)
+    clock.advance(minutes=1)
+    two_step(api, stream_factory, fake_model, ollama_fake, eat["id"], "たべる", 3)
+    # 飲む: meaning missed (still wrong on the latest answer)
+    clock.advance(minutes=1)
+    two_step(api, stream_factory, fake_model, ollama_fake, drink["id"], "のむ", 1)
+    # 見る: always right -> not listed
+    clock.advance(minutes=1)
+    two_step(api, stream_factory, fake_model, ollama_fake, see["id"], "みる", 3)
+    # one-step deck reviews don't count
+    ok(say(api, stream_factory, fake_model, ja[1]["id"], "はなす"))
+
+    w = ok(api.get_weak_spots(d["id"]))
+    assert w["steps"]["reading"] == {"answers": 5, "correct": 3}
+    assert w["steps"]["meaning"] == {"answers": 5, "correct": 4}
+    cards = {c["front"]: c for c in w["cards"]}
+    assert set(cards) == {"食べる", "飲む"}
+    assert cards["食べる"]["reading_misses"] == 2 and cards["食べる"]["meaning_misses"] == 0
+    assert cards["食べる"]["answers"] == 3 and cards["食べる"]["recovered"] is True
+    assert cards["飲む"]["meaning_misses"] == 1 and cards["飲む"]["recovered"] is False
+    # unrecovered cards come first even with fewer misses
+    assert [c["front"] for c in w["cards"]] == ["飲む", "食べる"]
+
+
+def test_weak_spots_use_overrides_and_window(api, core, stream_factory, fake_model, ollama_fake, clock, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    r = two_step(api, stream_factory, fake_model, ollama_fake, c["id"], "のむ", 3)
+    assert ok(api.get_weak_spots(d["id"]))["cards"][0]["reading_misses"] == 1
+    ok(api.override_grade(r["review_id"], True, "reading"))  # "I was right"
+    w = ok(api.get_weak_spots(d["id"]))
+    assert w["cards"] == [] and w["steps"]["reading"]["correct"] == 1
+    ok(api.override_grade(r["review_id"], False, "reading"))
+    clock.advance(days=40)
+    assert ok(api.get_weak_spots(d["id"], 30))["steps"]["reading"]["answers"] == 0
+    assert ok(api.get_weak_spots(d["id"], 0))["cards"][0]["reading_misses"] == 1  # 0 = all history
+    assert code(api.get_weak_spots(d["id"], -1)) == "invalid_input"
+    assert code(api.get_weak_spots(999)) == "not_found"

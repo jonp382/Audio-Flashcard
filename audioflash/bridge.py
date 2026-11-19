@@ -233,6 +233,10 @@ class Api:
         return self._core.list_reviews(_id(card_id, "card_id"))
 
     @_envelope
+    def get_weak_spots(self, deck_id, days=30):
+        return self._core.get_weak_spots(_id(deck_id, "deck_id"), days)
+
+    @_envelope
     def list_recordings(self, card_id):
         return self._core.list_recordings(_id(card_id, "card_id"))
 

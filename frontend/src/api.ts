@@ -198,6 +198,24 @@ export interface ReviewHistoryRow {
   steps: StepResult[] | null
 }
 
+export interface WeakSpotCard {
+  card_id: number
+  front: string
+  reading: string | null
+  back: string
+  answers: number // two-step reviews of this card in the window
+  reading_misses: number
+  meaning_misses: number
+  last_missed_at: string | null
+  recovered: boolean // the latest answer was right on every step
+}
+
+export interface WeakSpots {
+  days: number // 0 = all history
+  steps: Record<AnswerStep, { answers: number; correct: number }>
+  cards: WeakSpotCard[]
+}
+
 export interface ImportPreview {
   columns: string[]
   rows: string[][]
@@ -336,6 +354,7 @@ export const api = {
   micTestPlay: () => call<null>('mic_test_play'),
   // history & playback
   listReviews: (cardId: number) => call<ReviewHistoryRow[]>('list_reviews', cardId),
+  getWeakSpots: (deckId: number, days: number) => call<WeakSpots>('get_weak_spots', deckId, days),
   listRecordings: (cardId: number) => call<{ id: number; created_at: string }[]>('list_recordings', cardId),
   playRecording: (recordingId: number) => call<null>('play_recording', recordingId),
   stopPlayback: () => call<null>('stop_playback'),

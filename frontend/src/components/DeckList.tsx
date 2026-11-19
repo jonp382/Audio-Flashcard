@@ -9,11 +9,13 @@ export function DeckList({
   onCards,
   onSettings,
   onImport,
+  onWeakSpots,
 }: {
   onStudy: (d: Deck) => void
   onCards: (d: Deck) => void
   onSettings: (d: Deck) => void
   onImport: (d: Deck) => void
+  onWeakSpots: (d: Deck) => void
 }) {
   const [decks, setDecks] = useState<Deck[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -110,6 +112,9 @@ export function DeckList({
                         )}
                         <Button variant="ghost" onClick={() => onCards(d)}>Cards</Button>
                         <Button variant="ghost" onClick={() => onImport(d)}>Import</Button>
+                        {d.language === 'ja' && (
+                          <Button variant="ghost" onClick={() => onWeakSpots(d)} disabled={!d.total_cards}>Weak spots</Button>
+                        )}
                         <Button variant="ghost" onClick={() => onSettings(d)} aria-label="Deck settings">⚙</Button>
                       </div>
                     </td>
