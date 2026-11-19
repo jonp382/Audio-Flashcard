@@ -23,6 +23,7 @@ export function DeckList({
   const [name, setName] = useState('')
   const [language, setLanguage] = useState<Language>('ja')
   const [customDeck, setCustomDeck] = useState<Deck | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -49,13 +50,50 @@ export function DeckList({
     }
   }
 
+  const exportDeck = async (d: Deck) => {
+    setError(null)
+    setNotice(null)
+    try {
+      const r = await api.exportDeck(d.id)
+      if (r) setNotice(`Saved ${d.name} (${r.cards} cards, with progress) to ${r.path}`)
+    } catch (e) {
+      setError(errorMessage(e))
+    }
+  }
+
+  const restoreDeck = async () => {
+    setError(null)
+    setNotice(null)
+    try {
+      const r = await api.importDeckFile()
+      if (!r) return
+      setNotice(`Restored “${r.deck.name}”: ${r.cards} cards and ${r.reviews} reviews.`)
+      await load()
+    } catch (e) {
+      setError(errorMessage(e))
+    }
+  }
+
   return (
     <div>
       <PageHeader
         title="Decks"
-        actions={<Button variant="primary" onClick={() => setCreating((v) => !v)}>+ New deck</Button>}
+        actions={
+          <>
+            <Button variant="ghost" onClick={restoreDeck} title="Load a deck saved with Export (.afdeck), with its progress, as a new deck">
+              Restore deck file…
+            </Button>
+            <Button variant="primary" onClick={() => setCreating((v) => !v)}>+ New deck</Button>
+          </>
+        }
       />
       <ErrorBanner message={error} onClose={() => setError(null)} />
+      {notice && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800">
+          <span className="flex-1 break-all">{notice}</span>
+          <button className="text-emerald-600 hover:text-emerald-800" onClick={() => setNotice(null)} aria-label="Dismiss">✕</button>
+        </div>
+      )}
 
       {creating && (
         <Panel className="mb-5 space-y-4">
@@ -112,6 +150,7 @@ export function DeckList({
                         )}
                         <Button variant="ghost" onClick={() => onCards(d)}>Cards</Button>
                         <Button variant="ghost" onClick={() => onImport(d)}>Import</Button>
+                        <Button variant="ghost" onClick={() => exportDeck(d)} title="Save this deck with all its progress to a file (.afdeck)">Export</Button>
                         {d.language === 'ja' && (
                           <Button variant="ghost" onClick={() => onWeakSpots(d)} disabled={!d.total_cards}>Weak spots</Button>
                         )}

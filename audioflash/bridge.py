@@ -160,6 +160,14 @@ class Api:
         return self._core.import_preview(path)
 
     @_envelope
+    def export_deck(self, deck_id):
+        return self._core.export_deck(_id(deck_id, "deck_id"))
+
+    @_envelope
+    def import_deck_file(self):
+        return self._core.import_deck_file()
+
+    @_envelope
     def import_plan(self, path, deck_id, mapping=None):
         return self._core.import_plan(path, _id(deck_id, "deck_id"), mapping)
 

@@ -349,6 +349,8 @@ export const api = {
   importPreview: (path: string) => call<ImportPreview>('import_preview', path),
   importCards: (path: string, deckId: number, mapping: ImportMapping | null) =>
     call<ImportResult>('import_cards', path, deckId, mapping),
+  exportDeck: (deckId: number) => call<{ path: string; cards: number } | null>('export_deck', deckId),
+  importDeckFile: () => call<{ deck: Deck; cards: number; reviews: number } | null>('import_deck_file'),
   importPlan: (path: string, deckId: number, mapping: ImportMapping | null) =>
     call<ImportPlan>('import_plan', path, deckId, mapping),
   importCardsMissing: (path: string, deckId: number, mapping: ImportMapping | null, missing: 'keep' | 'remove') =>

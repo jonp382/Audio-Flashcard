@@ -135,6 +135,23 @@ def main(argv: list[str] | None = None) -> int:
             return res[0] if isinstance(res, (list, tuple)) else str(res)
 
         core.file_dialog = file_dialog
+
+        deck_types = ("Audio Flashcard deck (*.afdeck)", "All files (*.*)")
+
+        def deck_open_dialog() -> str | None:
+            res = window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=False, file_types=deck_types)
+            if not res:
+                return None
+            return res[0] if isinstance(res, (list, tuple)) else str(res)
+
+        def deck_save_dialog(suggested: str) -> str | None:
+            res = window.create_file_dialog(webview.FileDialog.SAVE, save_filename=suggested, file_types=deck_types)
+            if not res:
+                return None
+            return res[0] if isinstance(res, (list, tuple)) else str(res)
+
+        core.deck_open_dialog = deck_open_dialog
+        core.deck_save_dialog = deck_save_dialog
         window.events.closing += lambda *a: core.shutdown()
         try:
             webview.start(gui=_gui_backend(), debug=args.dev, private_mode=True)

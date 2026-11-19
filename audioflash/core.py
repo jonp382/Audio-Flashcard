@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 import webbrowser
@@ -21,7 +22,7 @@ from typing import Any, Callable, Iterator
 
 import numpy as np
 
-from . import audio, config, database, importer, reading_match, reviews, scheduler, srs
+from . import audio, config, database, deckfile, importer, reading_match, reviews, scheduler, srs
 from .errors import AppError
 from .evaluator import CardContext, GradingFailed, LLMUnavailable, OllamaClient
 from .grading import grade_answer, grade_meaning
@@ -85,6 +86,10 @@ class Core:
         self.encoder = encoder
         self.open_browser = open_browser
         self.file_dialog: Callable[[], str | None] | None = None  # set by __main__ once the window exists
+        # Deck files (.afdeck): native open / save dialogs, also set by __main__. The save
+        # dialog gets a suggested file name. Paths only ever come from these dialogs.
+        self.deck_open_dialog: Callable[[], str | None] | None = None
+        self.deck_save_dialog: Callable[[str], str | None] | None = None
 
         self._review_lock = threading.Lock()
         self._state_lock = threading.Lock()
@@ -481,6 +486,55 @@ class Core:
                 if self._heard and self._heard.card_id in removed:
                     self._heard = None
         return res
+
+    # --- deck files (backup / restore with progress) -------------------------------------------
+
+    def export_deck(self, deck_id: int) -> dict | None:
+        """Save the deck and all its progress to a .afdeck file the user picks. None if
+        the dialog was cancelled."""
+        with self.db() as conn:
+            deck = self._deck_or_404(conn, deck_id)
+            data = deckfile.export_deck(conn, deck_id, self.clock())
+        if self.deck_save_dialog is None:
+            raise AppError("internal_error", "File dialog not available")
+        safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", deck["name"]).strip() or "deck"
+        picked = self.deck_save_dialog(f"{safe}{deckfile.SUFFIX}")
+        if not picked:
+            return None
+        p = Path(picked)
+        if p.suffix.lower() != deckfile.SUFFIX:
+            p = p.with_name(p.name + deckfile.SUFFIX)
+        tmp = p.with_name(p.name + ".part")
+        try:
+            tmp.write_text(deckfile.dumps(data), encoding="utf-8")
+            tmp.replace(p)
+        except OSError as e:
+            tmp.unlink(missing_ok=True)
+            raise AppError("import_error", f"Could not write the file: {e}") from e
+        return {"path": str(p), "cards": len(data["cards"])}
+
+    def import_deck_file(self) -> dict | None:
+        """Restore a .afdeck file the user picks as a NEW deck. None if cancelled."""
+        if self.deck_open_dialog is None:
+            raise AppError("internal_error", "File dialog not available")
+        picked = self.deck_open_dialog()
+        if not picked:
+            return None
+        p = Path(picked)
+        try:
+            if p.stat().st_size > deckfile.MAX_BYTES:
+                raise AppError("import_error", "The file is too large to be a deck file.")
+            raw = p.read_bytes()
+        except OSError as e:
+            raise AppError("import_error", f"Could not read the file: {e}") from e
+        try:
+            parsed = deckfile.parse(raw)
+            with self.db() as conn:
+                res = deckfile.import_deck(conn, parsed, self.clock())
+                deck = database.deck_to_dict(database.get_deck(conn, res["deck_id"]))
+        except deckfile.DeckFileError as e:
+            raise AppError("import_error", str(e)) from e
+        return {"deck": deck, "cards": res["cards"], "reviews": res["reviews"]}
 
     # --- session & recording ----------------------------------------------------------------
 

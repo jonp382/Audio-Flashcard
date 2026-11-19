@@ -61,6 +61,8 @@ export function createMockApi(): PyApi {
     start_custom_study: (id: number) => { done.clear(); return ok(next(id)) },
     pick_import_file: () => ok({ path: '/home/user/cards.txt' }),
     import_preview: () => ok({ columns: ['Front', 'Back', 'Reading'], rows: [['猫', 'cat', 'ねこ'], ['犬', 'dog', 'いぬ']], total_rows: 2, detected: { encoding: 'utf-8-sig', delimiter: 'tab', anki_export: true } }),
+    export_deck: () => ok({ path: '/home/user/Kaishi.afdeck', cards: 4 }),
+    import_deck_file: () => ok(null),
     import_plan: () => ok({ new: 1, updated: 1, unchanged: 0, skipped_duplicates: 0, errors: [], missing: [{ card_id: 9, front: '次', reading: 'つぎ', back: 'next' }] }),
     import_cards: (_p: string, _d: number, _m: unknown, missing?: string) => ok({ imported: 1, updated: 1, unchanged: 0, removed: missing === 'remove' ? 1 : 0, skipped_duplicates: 0, errors: [], missing: [{ card_id: 9, front: '次', reading: 'つぎ', back: 'next' }] }),
     begin_session: (id: number) => { mic = true; return ok(next(id)) },
