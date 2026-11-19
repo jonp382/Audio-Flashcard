@@ -85,10 +85,14 @@ export function CustomStudyDialog({ deck, onStarted, onClose }: { deck: Deck; on
             <label className={`flex gap-3 rounded-lg border p-3 ${practice ? 'border-violet-400 bg-violet-50' : 'border-slate-200'} ${opts.studied_today === 0 ? 'opacity-50' : ''}`}>
               <input type="checkbox" className="mt-1" checked={practice} disabled={opts.studied_today === 0} onChange={(e) => setPractice(e.target.checked)} />
               <span className="flex-1 space-y-1">
-                <span className="block text-sm font-medium">Review the {opts.studied_today} cards I already studied today</span>
+                <span className="block text-sm font-medium">
+                  Review the {opts.studied_today} cards from today that are scheduled for later
+                </span>
                 <span className="block text-xs text-slate-500">
                   Each card once more. Answers are saved to its history. A correct answer keeps its schedule (it's already planned); a miss counts
                   as a real lapse, so the card comes back sooner.
+                  {opts.learning_today > 0 &&
+                    ` The other ${opts.learning_today} cards you studied today are still in learning; they come back on their own through Study.`}
                 </span>
               </span>
             </label>

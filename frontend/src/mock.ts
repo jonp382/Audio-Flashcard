@@ -57,7 +57,7 @@ export function createMockApi(): PyApi {
     update_card: (id: number, patch: Partial<Card>) => { const c = cards.find((x) => x.id === id)!; Object.assign(c, patch, { updated_at: now() }); return ok(c) },
     delete_card: (id: number) => { cards.splice(cards.findIndex((c) => c.id === id), 1); return ok() },
     get_next_card: (id: number) => ok(next(id)),
-    get_custom_study_options: () => ok({ new_available: 12, studied_today: done.size, extra_new_today: 0 }),
+    get_custom_study_options: () => ok({ new_available: 12, studied_today: done.size, learning_today: 0, extra_new_today: 0 }),
     start_custom_study: (id: number) => { done.clear(); return ok(next(id)) },
     pick_import_file: () => ok({ path: '/home/user/cards.txt' }),
     import_preview: () => ok({ columns: ['Front', 'Back', 'Reading'], rows: [['猫', 'cat', 'ねこ'], ['犬', 'dog', 'いぬ']], total_rows: 2, detected: { encoding: 'utf-8-sig', delimiter: 'tab', anki_export: true } }),

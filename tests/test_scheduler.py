@@ -66,6 +66,21 @@ def test_learn_ahead_within_20_minutes(core, clock):
     assert nxt["next_learning_due_at"] == to_iso(clock.now + timedelta(minutes=35))
 
 
+def test_deck_list_offers_learning_cards_due_soon(core, clock):
+    """Owner's bug: 13 learning cards due in 6 min, but the deck list showed nothing due
+    (no Study button) because it only counted cards due this second."""
+    d, cards = make_deck(core, 2, new_per_day=0)
+    a, b = cards[0]["id"], cards[1]["id"]
+    set_card(core, a, state="learning", learning_step=1, due_at=to_iso(clock.now + timedelta(minutes=6)))
+    set_card(core, b, state="learning", learning_step=1, due_at=to_iso(clock.now + timedelta(minutes=45)))
+    deck = next(x for x in core.list_decks() if x["id"] == d["id"])
+    assert deck["counts"]["learning"] == 1  # the 6-minute card: Study is offered
+    assert deck["learning_later"] == {"count": 1, "next_due_at": to_iso(clock.now + timedelta(minutes=45))}
+    assert core.get_next_card(d["id"])["card"]["id"] == a  # and Study shows it
+    opts = core.get_custom_study_options(d["id"])
+    assert opts["learning_today"] == 0 and opts["studied_today"] == 0  # never studied today
+
+
 def test_done_for_now_when_empty(core):
     d, _ = make_deck(core, 0)
     nxt = core.get_next_card(d["id"])
@@ -137,7 +152,9 @@ def test_extra_new_cards_raise_today_limit_and_count_normally(core, clock):
     d, cards = make_deck(core, 5, new_per_day=2)
     for c in cards[:2]:
         answer_later(core, c["id"], 3)
-    assert core.get_custom_study_options(d["id"]) == {"new_available": 3, "studied_today": 0, "extra_new_today": 0}  # still in learning steps
+    assert core.get_custom_study_options(d["id"]) == {
+        "new_available": 3, "studied_today": 0, "learning_today": 2, "extra_new_today": 0
+    }  # still in learning steps, due again soon
     nxt = core.start_custom_study(d["id"], 2, False)
     assert nxt["counts"]["new"] == 2
     # learn-ahead learning cards come first, then the extra new cards in file order

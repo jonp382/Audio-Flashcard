@@ -36,6 +36,7 @@ export interface Counts {
 export interface CustomStudyOptions {
   new_available: number // unseen new cards beyond today's current limit
   studied_today: number // cards studied today that are not due again yet
+  learning_today: number // cards studied today still in learning, due again soon (normal Study)
   extra_new_today: number
 }
 
@@ -50,6 +51,8 @@ export interface Deck {
   created_at: string
   counts?: Counts
   total_cards?: number
+  // learning cards due after the learn-ahead window (list_decks only)
+  learning_later?: { count: number; next_due_at: string | null }
 }
 
 export interface Card {

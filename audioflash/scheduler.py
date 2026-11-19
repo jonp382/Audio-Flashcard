@@ -96,13 +96,15 @@ def practice_candidates(conn: sqlite3.Connection, deck_id: int, now: datetime) -
 
 def counts(conn: sqlite3.Connection, deck: sqlite3.Row, now: datetime) -> dict[str, int]:
     """Cards due now after limits: new (blue), learning (red), review (green), plus the
-    practice cards left in an active practice pass."""
+    practice cards left in an active practice pass. Learning counts cards due within the
+    learn-ahead window, the same ones next_card() will show, so a deck whose learning
+    cards come back in a few minutes still offers Study."""
     deck_id = deck["id"]
-    now_iso = to_iso(now)
     new_left, rev_left = _remaining(deck, conn, now)
+    ahead = to_iso(now + timedelta(minutes=config.LEARN_AHEAD_MINUTES))
     learning = conn.execute(
         "SELECT COUNT(*) FROM cards WHERE deck_id = ? AND state IN ('learning','relearning') AND due_at <= ?",
-        (deck_id, now_iso),
+        (deck_id, ahead),
     ).fetchone()[0]
     review = conn.execute(
         "SELECT COUNT(*) FROM cards WHERE deck_id = ? AND state = 'review' AND due_date <= ?",
@@ -117,6 +119,17 @@ def counts(conn: sqlite3.Connection, deck: sqlite3.Row, now: datetime) -> dict[s
     }
 
 
+def learning_later(conn: sqlite3.Connection, deck_id: int, now: datetime) -> dict[str, Any]:
+    """Learning cards due after the learn-ahead window: how many, and the next due time."""
+    ahead = to_iso(now + timedelta(minutes=config.LEARN_AHEAD_MINUTES))
+    row = conn.execute(
+        "SELECT COUNT(*) AS n, MIN(due_at) AS next FROM cards WHERE deck_id = ? "
+        "AND state IN ('learning','relearning') AND due_at > ?",
+        (deck_id, ahead),
+    ).fetchone()
+    return {"count": row["n"], "next_due_at": row["next"]}
+
+
 def custom_study_options(conn: sqlite3.Connection, deck: sqlite3.Row, now: datetime) -> dict[str, int]:
     deck_id = deck["id"]
     new_left, _ = _remaining(deck, conn, now)
@@ -129,7 +142,11 @@ def custom_study_options(conn: sqlite3.Connection, deck: sqlite3.Row, now: datet
     ).fetchall()
     return {
         "new_available": max(0, unseen - new_left),  # new cards beyond today's current limit
+        # studied today and not due again today (the practice pass can show these)
         "studied_today": sum(1 for c in studied if is_practice(c, now)),
+        # the rest of today's cards: still in learning and due again soon, so they come back
+        # through normal Study (studied_today + learning_today = all cards studied today)
+        "learning_today": sum(1 for c in studied if not is_practice(c, now)),
         "extra_new_today": extension(conn, deck_id, now)["extra_new"],
     }
 

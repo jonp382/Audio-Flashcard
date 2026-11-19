@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, errorMessage, type Deck, type Language } from '../api'
+import { formatDue } from '../format'
 import { Button, CountBadges, ErrorBanner, Field, PageHeader, Panel, inputCls } from './ui'
 import { CustomStudyDialog } from './CustomStudyDialog'
 import { LanguagePicker } from './LanguagePicker'
@@ -138,7 +139,15 @@ export function DeckList({
                       <div className="text-xs text-slate-400">{d.total_cards ?? 0} cards</div>
                     </td>
                     <td className="px-4 py-3 text-slate-600">{d.language === 'ja' ? 'Japanese' : 'English'}</td>
-                    <td className="px-4 py-3"><CountBadges counts={d.counts} /></td>
+                    <td className="px-4 py-3">
+                      <CountBadges counts={d.counts} />
+                      {due === 0 && d.learning_later && d.learning_later.count > 0 && d.learning_later.next_due_at && (
+                        <div className="mt-1 text-xs text-slate-500">
+                          {d.learning_later.count} learning {d.learning_later.count === 1 ? 'card' : 'cards'} back{' '}
+                          {formatDue(d.learning_later.next_due_at)}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
                         {due > 0 ? (

@@ -233,6 +233,7 @@ class Core:
             for row in conn.execute("SELECT * FROM decks ORDER BY name COLLATE NOCASE, id"):
                 d = database.deck_to_dict(row)
                 d["counts"] = scheduler.counts(conn, row, now)
+                d["learning_later"] = scheduler.learning_later(conn, row["id"], now)
                 d["total_cards"] = conn.execute("SELECT COUNT(*) FROM cards WHERE deck_id = ?", (row["id"],)).fetchone()[0]
                 out.append(d)
             return out
