@@ -350,3 +350,29 @@ def test_weak_spots_use_overrides_and_window(api, core, stream_factory, fake_mod
     assert ok(api.get_weak_spots(d["id"], 0))["cards"][0]["reading_misses"] == 1  # 0 = all history
     assert code(api.get_weak_spots(d["id"], -1)) == "invalid_input"
     assert code(api.get_weak_spots(999)) == "not_found"
+
+
+def test_question_marks_stripped_from_meaning(api, core, stream_factory, fake_model, ollama_fake, ja2):
+    """大きな: Whisper wrote "big or large?" and the LLM marked it down as a question."""
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    assert ok(say(api, stream_factory, fake_model, c["id"], "たべる？"))["transcript"] == "たべる？"  # reading untouched
+    r = ok(say(api, stream_factory, fake_model, c["id"], "big or large?", "meaning"))
+    assert r["steps"][1]["transcript"] == "big or large"
+    body = [b for p, b in ollama_fake.requests if p == "/api/chat"][-1]
+    assert "Transcript of learner's answer: big or large\n" in body["messages"][1]["content"] + "\n"
+    assert "never judge" in body["messages"][0]["content"]
+
+
+def test_only_question_marks_is_no_speech(api, core, stream_factory, fake_model, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "たべる"))
+    assert code(say(api, stream_factory, fake_model, c["id"], "?", "meaning")) == "no_speech"
+
+
+def test_en_deck_strips_question_marks(api, core, stream_factory, fake_model, ollama_fake):
+    d = ok(api.create_deck("EN", "en"))
+    c = ok(api.create_card(d["id"], "大きな", "big, large"))
+    ok(api.begin_session(d["id"]))
+    assert ok(say(api, stream_factory, fake_model, c["id"], "Big?"))["transcript"] == "Big"

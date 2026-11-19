@@ -58,6 +58,7 @@ class HeldAnswer:
 
 
 STEPS = ("reading", "meaning")
+_QUESTION_MARKS = re.compile(r"[?？]")
 DUPLICATE_CARD = "This deck already has a card with the same front, reading and back"
 # Silence between the reading and meaning clips in the saved recording.
 STEP_GAP_S = 0.4
@@ -687,11 +688,18 @@ class Core:
 
     def _transcribe(self, samples: np.ndarray, language: str, expected: list[str]) -> str:
         try:
-            return self.whisper.transcribe_pcm(samples, language, expected)  # type: ignore[arg-type]
+            text = self.whisper.transcribe_pcm(samples, language, expected)  # type: ignore[arg-type]
         except NoSpeech as e:
             raise AppError("no_speech", "Didn't catch that, try again.") from e
         except WhisperNotReady as e:
             raise AppError("whisper_not_ready", "The speech model is not ready yet") from e
+        if language == "en":
+            # Whisper guesses "?" from intonation; the LLM then grades the meaning as "said
+            # as a question" (大きな: "big or large?" scored 1). A spoken answer never needs it.
+            text = _QUESTION_MARKS.sub("", text).strip()
+            if not text:
+                raise AppError("no_speech", "Didn't catch that, try again.")
+        return text
 
     def _grade_persist(
         self, card_id: int, samples: np.ndarray, transcript: str, reading: HeardReading | None = None

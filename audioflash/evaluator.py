@@ -57,7 +57,8 @@ Scores:
     a small mispronunciation that changed a word)
 3 = fully correct. Synonyms and equivalent phrasings with the same meaning are correct.
     Differences in writing system (kana / kanji / romaji), capitalization and punctuation
-    are NOT errors.
+    are NOT errors. Speech recognition guesses the punctuation from intonation, so never judge
+    whether an answer sounded like a question or a statement.
     If the expected answer lists several meanings (separated by commas or semicolons), any ONE
     of them is fully correct. Text in parentheses in the expected answer may be a usage note
     ("polite form") that the learner need not say, or a placeholder ("person from (country)").
