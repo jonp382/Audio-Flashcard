@@ -32,13 +32,16 @@ class LLMGrade(BaseModel):
     feedback: str
 
 
+# Feedback comes BEFORE score: ollama generates the fields in schema order, so the model
+# writes its judgement first and then scores it. With score first (and thinking off) it
+# committed to a number blind and wrote feedback to justify it, sometimes nonsense.
 GRADE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "score": {"type": "integer", "minimum": 0, "maximum": 3},
         "feedback": {"type": "string"},
+        "score": {"type": "integer", "minimum": 0, "maximum": 3},
     },
-    "required": ["score", "feedback"],
+    "required": ["feedback", "score"],
 }
 
 SYSTEM_PROMPT = """You grade a language learner's spoken flashcard answer.
@@ -65,8 +68,9 @@ When an example sentence is given, the card's word is marked with <b>...</b>. Us
 to see which sense of the word the card is about: a word with several senses (高い = expensive,
 or high/tall) is graded against the sense the expected answer and the sentence use.
 
-Write the feedback in English, 1-2 short sentences. When there is a mistake, name it
-specifically. Reply only with the JSON object."""
+Write the feedback first, in English, 1-2 short sentences: compare the learner's answer with the
+expected answer, and when there is a mistake, name it specifically. Then give the score that
+matches your feedback. Reply only with the JSON object."""
 
 
 def build_messages(
@@ -86,7 +90,10 @@ def build_messages(
         lines.append(f"Reading: {reading}")
     if sentence:
         lines.append(f"Example sentence: {sentence}" + (f" ({sentence_meaning})" if sentence_meaning else ""))
-    lines.append(f"Answer language: {'English' if language == 'en' else 'Japanese'}")
+    if language == "en":
+        lines.append("Task: the learner saw the card prompt and said its meaning in English.")
+    else:
+        lines.append("Task: the learner saw the card prompt and answered in Japanese.")
     lines.append(f"Transcript of learner's answer: {transcript}")
     return [
         {"role": "system", "content": SYSTEM_PROMPT},

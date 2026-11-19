@@ -19,7 +19,7 @@ def test_think_sent_only_when_supported(ollama_fake):
     assert chat["think"] is False
     assert chat["keep_alive"] == "30m"
     assert chat["options"] == {"temperature": 0.1, "num_predict": 256}
-    assert chat["format"]["required"] == ["score", "feedback"]
+    assert chat["format"]["required"] == ["feedback", "score"]
 
     ollama_fake.capabilities = ["completion"]
     c.check()
@@ -117,3 +117,20 @@ def test_en_uses_llm(ollama_fake):
     assert (g.score, g.feedback, g.is_correct) == (2, "Close.", True)
     chat = [b for p, b in ollama_fake.requests if p == "/api/chat"][-1]
     assert "to chat" in chat["messages"][1]["content"]
+
+
+def test_schema_asks_for_feedback_before_score():
+    """ollama fills fields in schema order; the model must judge before it scores."""
+    from audioflash.evaluator import GRADE_SCHEMA
+
+    assert list(GRADE_SCHEMA["properties"]) == ["feedback", "score"]
+    assert GRADE_SCHEMA["required"] == ["feedback", "score"]
+
+
+def test_messages_state_the_task():
+    from audioflash.evaluator import build_messages
+
+    en = build_messages("あまり", "(not) very, (not) much", "あまり", "en", "not very not much")[1]["content"]
+    assert "said its meaning in English" in en
+    ja = build_messages("cat", "ねこ", None, "ja", "ねこ")[1]["content"]
+    assert "answered in Japanese" in ja
