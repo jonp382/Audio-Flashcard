@@ -55,6 +55,9 @@ Scores:
 3 = fully correct. Synonyms and equivalent phrasings with the same meaning are correct.
     Differences in writing system (kana / kanji / romaji), capitalization and punctuation
     are NOT errors.
+    If the expected answer lists several meanings (separated by commas or semicolons), any ONE
+    of them is fully correct. Text in parentheses in the expected answer is a usage note that the
+    learner does not need to say.
 
 Write the feedback in English, 1-2 short sentences. When there is a mistake, name it
 specifically. Reply only with the JSON object."""

@@ -8,12 +8,21 @@ interface Draft {
   back: string
   reading: string
   alts: string // one per line
+  sentence: string
+  sentenceMeaning: string
 }
 
-const empty: Draft = { front: '', back: '', reading: '', alts: '' }
+const empty: Draft = { front: '', back: '', reading: '', alts: '', sentence: '', sentenceMeaning: '' }
 
 function toDraft(c: Card): Draft {
-  return { front: c.front, back: c.back, reading: c.reading ?? '', alts: c.alt_answers.join('\n') }
+  return {
+    front: c.front,
+    back: c.back,
+    reading: c.reading ?? '',
+    alts: c.alt_answers.join('\n'),
+    sentence: c.sentence ?? '',
+    sentenceMeaning: c.sentence_meaning ?? '',
+  }
 }
 
 export function CardEditor({ deckId, onBack }: { deckId: number; onBack: () => void }) {
@@ -63,11 +72,20 @@ export function CardEditor({ deckId, onBack }: { deckId: number; onBack: () => v
     setError(null)
     const alt = draft.alts.split('\n').map((s) => s.trim()).filter(Boolean)
     const reading = draft.reading.trim() || null
+    const sentence = draft.sentence.trim() || null
+    const sentenceMeaning = draft.sentenceMeaning.trim() || null
     try {
       if (editing === 'new') {
-        await api.createCard(deckId, draft.front, draft.back, reading, alt)
+        await api.createCard(deckId, draft.front, draft.back, reading, alt, sentence, sentenceMeaning)
       } else if (typeof editing === 'number') {
-        await api.updateCard(editing, { front: draft.front, back: draft.back, reading, alt_answers: alt })
+        await api.updateCard(editing, {
+          front: draft.front,
+          back: draft.back,
+          reading,
+          alt_answers: alt,
+          sentence,
+          sentence_meaning: sentenceMeaning,
+        })
       }
       await load()
       if (andNext) setDraft(empty)
@@ -152,7 +170,14 @@ export function CardEditor({ deckId, onBack }: { deckId: number; onBack: () => v
               <Field label="Front (shown as the prompt)">
                 <input className={`${inputCls} jp text-base`} autoFocus value={draft.front} onChange={(e) => setDraft({ ...draft, front: e.target.value })} />
               </Field>
-              <Field label="Back (expected answer)" hint="Several answers can be separated with 、 , ; / or new lines.">
+              <Field
+                label="Back (expected answer)"
+                hint={
+                  deck?.language === 'ja'
+                    ? 'With a reading and an English back, the card has two steps: say the reading, then the meaning. Separate several answers with 、 , ; / or new lines.'
+                    : 'Several answers can be separated with 、 , ; / or new lines.'
+                }
+              >
                 <input className={inputCls} value={draft.back} onChange={(e) => setDraft({ ...draft, back: e.target.value })} />
               </Field>
               <Field label="Reading (optional)" hint={deck?.language === 'ja' ? 'For Japanese-answer decks this is what you must say, e.g. はなす.' : 'Helps the grader match kana and kanji.'}>
@@ -160,6 +185,12 @@ export function CardEditor({ deckId, onBack }: { deckId: number; onBack: () => v
               </Field>
               <Field label="Also accept (one per line)">
                 <textarea className={`${inputCls} jp`} rows={3} value={draft.alts} onChange={(e) => setDraft({ ...draft, alts: e.target.value })} />
+              </Field>
+              <Field label="Example sentence (optional)" hint="Shown under the word while you answer, to tell apart words like 方 (ほう) and 方 (かた).">
+                <input className={`${inputCls} jp`} value={draft.sentence} onChange={(e) => setDraft({ ...draft, sentence: e.target.value })} />
+              </Field>
+              <Field label="Sentence translation (optional)" hint="Shown only after you answer.">
+                <input className={inputCls} value={draft.sentenceMeaning} onChange={(e) => setDraft({ ...draft, sentenceMeaning: e.target.value })} />
               </Field>
               <div className="flex flex-wrap gap-2">
                 <Button variant="primary" onClick={() => save(false)} disabled={!draft.front.trim() || !draft.back.trim()}>Save</Button>

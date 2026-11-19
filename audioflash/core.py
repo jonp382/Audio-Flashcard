@@ -24,7 +24,7 @@ import numpy as np
 from . import audio, config, database, importer, reading_match, reviews, scheduler, srs
 from .errors import AppError
 from .evaluator import GradingFailed, LLMUnavailable, OllamaClient
-from .grading import grade_answer
+from .grading import grade_answer, grade_meaning
 from .model_setup import ModelDownloader
 from .paths import DataPaths
 from .stt import NoSpeech, WhisperNotReady, WhisperService
@@ -32,16 +32,34 @@ from .timeutil import to_iso, utc_now
 
 log = logging.getLogger(__name__)
 
-CONTENT_FIELDS = ("front", "back", "reading", "alt_answers")
+CONTENT_FIELDS = ("front", "back", "reading", "alt_answers", "sentence", "sentence_meaning")
 
 
 @dataclass
-class HeldAnswer:
-    """Audio + transcript kept after grading_failed / llm_unavailable for retry."""
+class HeardReading:
+    """Reading step of a two-step card: transcribed but not graded until the meaning
+    step is recorded. Re-recording the reading replaces it."""
 
     card_id: int
     samples: np.ndarray
     transcript: str
+
+
+@dataclass
+class HeldAnswer:
+    """Audio + transcript kept after grading_failed / llm_unavailable for retry.
+    `reading` is set when the answer is the meaning step of a two-step card."""
+
+    card_id: int
+    samples: np.ndarray
+    transcript: str
+    reading: HeardReading | None = None
+
+
+STEPS = ("reading", "meaning")
+DUPLICATE_CARD = "This deck already has a card with the same front, reading and back"
+# Silence between the reading and meaning clips in the saved recording.
+STEP_GAP_S = 0.4
 
 
 class Core:
@@ -71,6 +89,8 @@ class Core:
         self._review_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._rec_card: int | None = None
+        self._rec_step: str | None = None  # 'reading' / 'meaning' for two-step cards
+        self._heard: HeardReading | None = None
         self._held: HeldAnswer | None = None
         self._picked_path: Path | None = None
         self._session_deck: int | None = None
@@ -280,6 +300,8 @@ class Core:
         with self._state_lock:
             if self._held and self._held.card_id in ids:
                 self._held = None
+            if self._heard and self._heard.card_id in ids:
+                self._heard = None
 
     # --- cards ------------------------------------------------------------------------
 
@@ -289,9 +311,20 @@ class Core:
             rows = conn.execute("SELECT * FROM cards WHERE deck_id = ? ORDER BY created_at, id", (deck_id,))
             return [database.card_to_dict(r) for r in rows]
 
-    def create_card(self, deck_id: int, front: str, back: str, reading: str | None = None, alt_answers: list | None = None) -> dict:
+    def create_card(
+        self,
+        deck_id: int,
+        front: str,
+        back: str,
+        reading: str | None = None,
+        alt_answers: list | None = None,
+        sentence: str | None = None,
+        sentence_meaning: str | None = None,
+    ) -> dict:
         front, back = _req_str(front, "front"), _req_str(back, "back")
         reading = _opt_str(reading, "reading")
+        sentence = _opt_str(sentence, "sentence")
+        sentence_meaning = _opt_str(sentence_meaning, "sentence_meaning")
         alts = _alt_answers(alt_answers)
         now = to_iso(self.clock())
         with self.db() as conn:
@@ -299,11 +332,12 @@ class Core:
             try:
                 with database.transaction(conn):
                     cur = conn.execute(
-                        "INSERT INTO cards(deck_id, front, back, reading, alt_answers, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-                        (deck_id, front, back, reading, json.dumps(alts) if alts else None, now, now),
+                        "INSERT INTO cards(deck_id, front, back, reading, alt_answers, sentence, sentence_meaning, "
+                        "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (deck_id, front, back, reading, json.dumps(alts) if alts else None, sentence, sentence_meaning, now, now),
                     )
             except sqlite3.IntegrityError as e:
-                raise AppError("invalid_input", "A card with this front already exists in the deck") from e
+                raise AppError("invalid_input", DUPLICATE_CARD) from e
             return database.card_to_dict(database.get_card(conn, cur.lastrowid))
 
     def update_card(self, card_id: int, patch: dict) -> dict:
@@ -313,7 +347,7 @@ class Core:
         for k, v in patch.items():
             if k in ("front", "back"):
                 sets[k] = _req_str(v, k)
-            elif k == "reading":
+            elif k in ("reading", "sentence", "sentence_meaning"):
                 sets[k] = _opt_str(v, k)
             elif k == "alt_answers":
                 alts = _alt_answers(v)
@@ -330,7 +364,7 @@ class Core:
                         (*sets.values(), card_id),
                     )
             except sqlite3.IntegrityError as e:
-                raise AppError("invalid_input", "A card with this front already exists in the deck") from e
+                raise AppError("invalid_input", DUPLICATE_CARD) from e
             return database.card_to_dict(database.get_card(conn, card_id))
 
     def delete_card(self, card_id: int) -> None:
@@ -342,6 +376,8 @@ class Core:
         with self._state_lock:
             if self._held and self._held.card_id == card_id:
                 self._held = None
+            if self._heard and self._heard.card_id == card_id:
+                self._heard = None
 
     def get_custom_study_options(self, deck_id: int) -> dict:
         with self.db() as conn:
@@ -413,12 +449,15 @@ class Core:
         with self.db() as conn:
             deck = self._deck_or_404(conn, deck_id)
             language = deck["language"]
+            needs_llm = language == "en" or self._deck_has_meaning_steps(conn, deck_id)
         self._session_deck = deck_id
+        with self._state_lock:
+            self._heard = None
         try:
             self.mic.open(self.settings()["mic_device"])
         except audio.MicError as e:
             raise AppError("mic_error", str(e)) from e
-        if language == "en":
+        if needs_llm:
             def warm():
                 if not self.ollama.status.checked or not self.ollama.ready:
                     self.ollama.check()
@@ -428,11 +467,20 @@ class Core:
             threading.Thread(target=warm, name="ollama-warmup", daemon=True).start()
         return self.get_next_card(deck_id)
 
+    @staticmethod
+    def _deck_has_meaning_steps(conn: sqlite3.Connection, deck_id: int) -> bool:
+        rows = conn.execute(
+            "SELECT back, reading FROM cards WHERE deck_id = ? AND reading IS NOT NULL AND reading != ''", (deck_id,)
+        )
+        return any(database.has_meaning_step("ja", r["back"], r["reading"]) for r in rows)
+
     def end_session(self) -> None:
         self._session_deck = None
         self.mic.cancel_recording()
         with self._state_lock:
             self._rec_card = None
+            self._rec_step = None
+            self._heard = None
         self.mic.close()
 
     def open_mic(self) -> None:
@@ -446,22 +494,36 @@ class Core:
             return  # never cut off an active answer; the UI cancels explicitly
         self.mic.close()
 
-    def start_recording(self, card_id: int) -> None:
+    def start_recording(self, card_id: int, step: str | None = None) -> None:
+        """`step` is 'reading' or 'meaning' for two-step cards (default 'reading') and is
+        ignored for one-step cards. The meaning step needs the reading recorded first."""
+        if step is not None and step not in STEPS:
+            raise AppError("invalid_input", "step must be 'reading' or 'meaning'")
         with self.review_lock():
             if self.mic.recording:
                 raise AppError("busy", "Already recording")
             with self.db() as conn:
                 card = self._card_or_404(conn, card_id)
                 deck = database.get_deck(conn, card["deck_id"])
+            two_step = database.has_meaning_step(deck["language"], card["back"], card["reading"])
+            step = (step or "reading") if two_step else None
+            if step == "meaning":
+                with self._state_lock:
+                    heard = self._heard
+                if heard is None or heard.card_id != card_id:
+                    raise AppError("invalid_input", "Record the reading first")
             if not self.whisper.ready:
                 raise AppError("whisper_not_ready", "The speech model is not ready yet")
-            if deck["language"] == "en" and not self.ollama.ready:
-                self.ollama.check()
+            if deck["language"] == "en" or two_step:
+                if not self.ollama.ready:
+                    self.ollama.check()
                 if not self.ollama.ready:
                     raise AppError("llm_unavailable", "ollama is not running or the model is missing")
             self.player.stop()
             with self._state_lock:
                 self._held = None  # a new recording discards any held audio
+                if step != "meaning":
+                    self._heard = None  # re-recording the reading replaces it
             try:
                 self.mic.start_recording(self.settings()["mic_device"])
             except audio.Busy as e:
@@ -470,23 +532,44 @@ class Core:
                 raise AppError("mic_error", str(e)) from e
             with self._state_lock:
                 self._rec_card = card_id
+                self._rec_step = step
 
     def get_recording_status(self) -> dict:
         return self.mic.status()
 
     def cancel_recording(self) -> None:
+        """Cancelling the meaning step keeps the heard reading."""
         self.mic.cancel_recording()
         with self._state_lock:
             self._rec_card = None
+            self._rec_step = None
 
     def stop_recording(self) -> dict:
+        """One-step card or meaning step: the graded review result. Reading step: only
+        what Whisper heard, `{"stage": "heard", "step": "reading", ...}`, not graded."""
         with self.review_lock():
             with self._state_lock:
                 card_id, self._rec_card = self._rec_card, None
+                step, self._rec_step = self._rec_step, None
             if card_id is None or not self.mic.recording:
                 raise AppError("invalid_input", "Not recording")
             samples = self.mic.stop_recording()
-            return self._transcribe_grade_persist(card_id, samples)
+            card, language = self._card_context(card_id)
+            if step == "reading":
+                transcript = self._transcribe(samples, "ja", self._reading_expected(card))
+                with self._state_lock:
+                    self._heard = HeardReading(card_id, samples, transcript)
+                return {"stage": "heard", "step": "reading", "card_id": card_id, "transcript": transcript}
+            if step == "meaning":
+                with self._state_lock:
+                    heard = self._heard
+                if heard is None or heard.card_id != card_id:
+                    raise AppError("invalid_input", "Record the reading first")
+                back = card["back"]
+                transcript = self._transcribe(samples, "en", [back, *reading_match.split_answers(back)])
+                return self._grade_persist(card_id, samples, transcript, heard)
+            transcript = self._transcribe(samples, language, self._reading_expected(card))
+            return self._grade_persist(card_id, samples, transcript)
 
     def retry_grading(self) -> dict:
         with self.review_lock():
@@ -494,7 +577,7 @@ class Core:
                 held = self._held
             if held is None:
                 raise AppError("not_found", "No answer to retry")
-            return self._grade_persist(held.card_id, held.samples, held.transcript)
+            return self._grade_persist(held.card_id, held.samples, held.transcript, held.reading)
 
     def _card_context(self, card_id: int) -> tuple[sqlite3.Row, str]:
         with self.db() as conn:
@@ -502,56 +585,96 @@ class Core:
             deck = database.get_deck(conn, card["deck_id"])
             return card, deck["language"]
 
-    def _transcribe_grade_persist(self, card_id: int, samples: np.ndarray) -> dict:
-        card, language = self._card_context(card_id)
+    @staticmethod
+    def _reading_expected(card: sqlite3.Row) -> list[str]:
+        """Answers that must survive Whisper's hallucination blocklist."""
         alts = json.loads(card["alt_answers"]) if card["alt_answers"] else []
         expected = [card["front"], card["back"], card["reading"] or "", *alts]
-        expected += reading_match.split_answers(card["back"]) + reading_match.split_answers(card["reading"])
+        return expected + reading_match.split_answers(card["back"]) + reading_match.split_answers(card["reading"])
+
+    def _transcribe(self, samples: np.ndarray, language: str, expected: list[str]) -> str:
         try:
-            transcript = self.whisper.transcribe_pcm(samples, language, expected)
+            return self.whisper.transcribe_pcm(samples, language, expected)  # type: ignore[arg-type]
         except NoSpeech as e:
             raise AppError("no_speech", "Didn't catch that, try again.") from e
         except WhisperNotReady as e:
             raise AppError("whisper_not_ready", "The speech model is not ready yet") from e
-        return self._grade_persist(card_id, samples, transcript)
 
-    def _grade_persist(self, card_id: int, samples: np.ndarray, transcript: str) -> dict:
+    def _grade_persist(
+        self, card_id: int, samples: np.ndarray, transcript: str, reading: HeardReading | None = None
+    ) -> dict:
         card, language = self._card_context(card_id)
         alts = json.loads(card["alt_answers"]) if card["alt_answers"] else []
+        # Reading match accepts a transcript that is exactly the front (今日 guard). When
+        # another card shares the front with a different reading (方 ほう / 方 かた), the
+        # kanji alone doesn't show which reading was said, so that shortcut is skipped.
+        ja_front = "" if self._front_is_ambiguous(card) else card["front"]
+        steps: list[reviews.StepResult] | None = None
         try:
-            grade = grade_answer(language, transcript, card["front"], card["back"], card["reading"], alts, self.ollama)
+            if reading is None:
+                front = ja_front if language == "ja" else card["front"]
+                grade = grade_answer(language, transcript, front, card["back"], card["reading"], alts, self.ollama)
+            else:
+                # Two-step card: reading by the deterministic match, meaning by the LLM.
+                rg = grade_answer("ja", reading.transcript, ja_front, card["back"], card["reading"], alts, self.ollama)
+                mg = grade_meaning(transcript, card["front"], card["back"], card["reading"], self.ollama)
+                steps = [
+                    reviews.StepResult("reading", reading.transcript, rg),
+                    reviews.StepResult("meaning", transcript, mg),
+                ]
         except LLMUnavailable as e:
-            self._hold(card_id, samples, transcript)
+            self._hold(card_id, samples, transcript, reading)
             raise AppError("llm_unavailable", "Could not reach ollama. Start it and press retry.") from e
         except GradingFailed as e:
-            self._hold(card_id, samples, transcript)
+            self._hold(card_id, samples, transcript, reading)
             raise AppError("grading_failed", "The grader returned an unusable answer. Press retry.") from e
+        full_transcript = transcript
+        audio_out = samples
+        if steps is not None and reading is not None:
+            full_transcript, grade = reviews.combine_steps(steps)
+            gap = np.zeros(int(STEP_GAP_S * config.SAMPLE_RATE), dtype=np.float32)
+            audio_out = np.concatenate([reading.samples.astype(np.float32), gap, samples.astype(np.float32)])
         try:
-            ogg = self.encoder(samples) if samples.size else None
+            ogg = self.encoder(audio_out) if audio_out.size else None
         except Exception:
             log.exception("encoding recording failed; saving review without audio")
             ogg = None
         with self.db() as conn:
             try:
-                result = reviews.record_review(conn, self.paths, card_id, transcript, grade, ogg, self.clock())
+                result = reviews.record_review(conn, self.paths, card_id, full_transcript, grade, ogg, self.clock(), steps)
             except reviews.ReviewError as e:
                 raise AppError(e.code, e.message) from e
         with self._state_lock:
             self._held = None
+            if reading is not None and self._heard is reading:
+                self._heard = None
         return result
 
-    def _hold(self, card_id: int, samples: np.ndarray, transcript: str) -> None:
-        with self._state_lock:
-            self._held = HeldAnswer(card_id, samples, transcript)
+    def _front_is_ambiguous(self, card: sqlite3.Row) -> bool:
+        with self.db() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM cards WHERE deck_id = ? AND front = ? AND id != ? "
+                "AND COALESCE(reading, '') != COALESCE(?, '') LIMIT 1",
+                (card["deck_id"], card["front"], card["id"], card["reading"]),
+            ).fetchone()
+        return row is not None
 
-    def override_grade(self, review_id: int, correct: bool) -> dict:
+    def _hold(self, card_id: int, samples: np.ndarray, transcript: str, reading: HeardReading | None = None) -> None:
+        with self._state_lock:
+            self._held = HeldAnswer(card_id, samples, transcript, reading)
+
+    def override_grade(self, review_id: int, correct: bool, step: str | None = None) -> dict:
+        if step is not None and step not in STEPS:
+            raise AppError("invalid_input", "step must be 'reading' or 'meaning'")
         with self.review_lock(), self.db() as conn:
             try:
-                return reviews.override_grade(conn, review_id, bool(correct))
+                return reviews.override_grade(conn, review_id, bool(correct), step)
             except reviews.ReviewError as e:
                 raise AppError(e.code, e.message) from e
 
     def undo_last_review(self) -> dict:
+        with self._state_lock:
+            self._heard = None
         with self.review_lock(), self.db() as conn:
             try:
                 return reviews.undo_last_review(conn, self.paths)
@@ -560,7 +683,9 @@ class Core:
 
     def get_card(self, card_id: int) -> dict:
         with self.db() as conn:
-            return database.card_to_dict(self._card_or_404(conn, card_id))
+            card = self._card_or_404(conn, card_id)
+            deck = database.get_deck(conn, card["deck_id"])
+            return database.card_to_dict(card, deck["language"])
 
     # --- mic test (settings page) -----------------------------------------------------------
 
@@ -639,11 +764,19 @@ class Core:
             self._card_or_404(conn, card_id)
             rows = conn.execute(
                 "SELECT id, reviewed_at, transcript, score, score_original, overridden, is_correct, feedback, "
-                "state_before, state_after, interval_after, ease_after, recording_id FROM reviews "
+                "state_before, state_after, interval_after, ease_after, recording_id, steps FROM reviews "
                 "WHERE card_id = ? ORDER BY id DESC",
                 (card_id,),
             )
-            return [{**dict(r), "is_correct": bool(r["is_correct"]), "overridden": bool(r["overridden"])} for r in rows]
+            return [
+                {
+                    **dict(r),
+                    "is_correct": bool(r["is_correct"]),
+                    "overridden": bool(r["overridden"]),
+                    "steps": json.loads(r["steps"]) if r["steps"] else None,
+                }
+                for r in rows
+            ]
 
     def list_recordings(self, card_id: int) -> list[dict]:
         with self.db() as conn:

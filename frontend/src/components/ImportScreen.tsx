@@ -9,6 +9,8 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
   const [front, setFront] = useState(0)
   const [back, setBack] = useState(1)
   const [reading, setReading] = useState<number | null>(null)
+  const [sentence, setSentence] = useState<number | null>(null)
+  const [sentenceMeaning, setSentenceMeaning] = useState<number | null>(null)
   const [result, setResult] = useState<ImportResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -28,9 +30,13 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
       const f = find('front', 'expression', 'kanji', 'word')
       const b = find('back', 'meaning', 'english')
       const r = find('reading', 'kana', 'furigana')
+      const s = find('sentence', 'example', 'sentence_ja')
+      const sm = find('sentence_meaning', 'sentence translation', 'translation', 'sentence_en')
       setFront(f >= 0 ? f : 0)
       setBack(b >= 0 ? b : Math.min(1, p.columns.length - 1))
       setReading(r >= 0 ? r : null)
+      setSentence(s >= 0 ? s : null)
+      setSentenceMeaning(sm >= 0 ? sm : null)
     } catch (e) {
       setError(errorMessage(e))
     }
@@ -41,7 +47,7 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
     setBusy(true)
     setError(null)
     try {
-      setResult(await api.importCards(path, deckId, { front, back, reading }))
+      setResult(await api.importCards(path, deckId, { front, back, reading, sentence, sentence_meaning: sentenceMeaning }))
     } catch (e) {
       setError(errorMessage(e))
     } finally {
@@ -67,7 +73,8 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
         <p className="text-sm text-slate-600">
           Accepts <strong>.csv</strong>, <strong>.tsv</strong> and Anki's <strong>Notes in Plain Text (.txt)</strong> export.
           Anki furigana like <span className="jp">話[はな]す</span> is split into front <span className="jp">話す</span> and reading{' '}
-          <span className="jp">はなす</span> when no reading column is chosen. Cards whose front already exists in the deck are skipped.
+          <span className="jp">はなす</span> when no reading column is chosen. Cards whose front and reading already exist in the deck are skipped.
+          For Japanese decks, an English back adds a meaning step, and an example sentence helps tell apart words written the same way.
         </p>
         <div className="flex items-center gap-3">
           <Button variant="primary" onClick={pick}>Choose file…</Button>
@@ -85,6 +92,8 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
             <Field label="Front column">{colSelect(front, (v) => setFront(v ?? 0))}</Field>
             <Field label="Back column">{colSelect(back, (v) => setBack(v ?? 0))}</Field>
             <Field label="Reading column">{colSelect(reading, setReading, true)}</Field>
+            <Field label="Example sentence column">{colSelect(sentence, setSentence, true)}</Field>
+            <Field label="Sentence translation column">{colSelect(sentenceMeaning, setSentenceMeaning, true)}</Field>
           </div>
           <div className="max-h-80 overflow-auto rounded-lg border border-slate-200">
             <table className="w-full text-sm">
@@ -94,7 +103,17 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
                     <th key={i} className="px-3 py-2">
                       {c}
                       <span className="ml-1 font-semibold text-indigo-600">
-                        {i === front ? '· front' : i === back ? '· back' : i === reading ? '· reading' : ''}
+                        {i === front
+                          ? '· front'
+                          : i === back
+                            ? '· back'
+                            : i === reading
+                              ? '· reading'
+                              : i === sentence
+                                ? '· sentence'
+                                : i === sentenceMeaning
+                                  ? '· translation'
+                                  : ''}
                       </span>
                     </th>
                   ))}
@@ -104,7 +123,7 @@ export function ImportScreen({ deckId, deckName, onBack, onDone }: { deckId: num
                 {preview.rows.map((r, i) => (
                   <tr key={i} className="border-t border-slate-100">
                     {r.map((cell, j) => (
-                      <td key={j} className={`jp px-3 py-1.5 ${[front, back, reading].includes(j) ? '' : 'text-slate-400'}`}>{cell}</td>
+                      <td key={j} className={`jp px-3 py-1.5 ${[front, back, reading, sentence, sentenceMeaning].includes(j) ? '' : 'text-slate-400'}`}>{cell}</td>
                     ))}
                   </tr>
                 ))}

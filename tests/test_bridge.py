@@ -33,8 +33,17 @@ def code(res):
 
 @pytest.fixture
 def ja(api):
+    """One-step Japanese card (the back is Japanese, so there is no meaning step)."""
     d = ok(api.create_deck("JA", "ja"))
-    c = ok(api.create_card(d["id"], "話す", "to speak", "はなす"))
+    c = ok(api.create_card(d["id"], "話す", "はなす", "はなす"))
+    return d, c
+
+
+@pytest.fixture
+def ja2(api):
+    """Two-step card: say the reading, then the English meaning."""
+    d = ok(api.create_deck("JA2", "ja"))
+    c = ok(api.create_card(d["id"], "食べる", "to eat", "たべる"))
     return d, c
 
 

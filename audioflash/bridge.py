@@ -123,8 +123,8 @@ class Api:
         return self._core.get_card(_id(card_id, "card_id"))
 
     @_envelope
-    def create_card(self, deck_id, front, back, reading=None, alt_answers=None):
-        return self._core.create_card(_id(deck_id, "deck_id"), front, back, reading, alt_answers)
+    def create_card(self, deck_id, front, back, reading=None, alt_answers=None, sentence=None, sentence_meaning=None):
+        return self._core.create_card(_id(deck_id, "deck_id"), front, back, reading, alt_answers, sentence, sentence_meaning)
 
     @_envelope
     def update_card(self, card_id, patch):
@@ -177,8 +177,8 @@ class Api:
         return self._core.close_mic()
 
     @_envelope
-    def start_recording(self, card_id):
-        return self._core.start_recording(_id(card_id, "card_id"))
+    def start_recording(self, card_id, step=None):
+        return self._core.start_recording(_id(card_id, "card_id"), step)
 
     @_envelope
     def get_recording_status(self):
@@ -197,10 +197,10 @@ class Api:
         return self._core.retry_grading()
 
     @_envelope
-    def override_grade(self, review_id, correct):
+    def override_grade(self, review_id, correct, step=None):
         if not isinstance(correct, bool):
             raise AppError("invalid_input", "correct must be true or false")
-        return self._core.override_grade(_id(review_id, "review_id"), correct)
+        return self._core.override_grade(_id(review_id, "review_id"), correct, step)
 
     @_envelope
     def undo_last_review(self):

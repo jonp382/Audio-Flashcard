@@ -72,6 +72,19 @@ def clean_field(s: str) -> str:
     return _WS_RE.sub(" ", s).strip()
 
 
+_BOLD_OPEN_RE = re.compile(r"<\s*b\s*>", re.I)
+_BOLD_CLOSE_RE = re.compile(r"<\s*/\s*b\s*>", re.I)
+
+
+def clean_sentence(s: str) -> str:
+    """Like clean_field, but keeps <b>…</b> (Anki decks bold the card's word in the
+    example sentence). The UI renders it as text, never as HTML."""
+    s = _BOLD_OPEN_RE.sub("\x01", s)
+    s = _BOLD_CLOSE_RE.sub("\x02", s)
+    s = clean_field(s).replace("<", "").replace(">", "")
+    return s.replace("\x01", "<b>").replace("\x02", "</b>")
+
+
 # 話[はな]す -> front 話す, reading はなす. Anki puts a space before a kanji group that
 # follows other text ("今日[きょう]は 天気[てんき]"); that space is a separator, not content.
 _FURI_RE = re.compile(r" ?([^\s\[\]]+?)\[([^\]]+)\]")
@@ -156,11 +169,18 @@ def preview(parsed: ParsedFile, n: int = 10) -> dict[str, Any]:
     }
 
 
-def resolve_mapping(parsed: ParsedFile, mapping: dict | None) -> tuple[int, int, int | None]:
+OPTIONAL_COLUMNS = ("reading", "sentence", "sentence_meaning")
+
+
+def resolve_mapping(parsed: ParsedFile, mapping: dict | None) -> dict[str, int | None]:
+    """-> {"front": i, "back": i, "reading": i|None, "sentence": i|None, "sentence_meaning": i|None}"""
     if mapping is None:
         lower = [c.strip().lower() for c in parsed.columns]
         if "front" in lower and "back" in lower:
-            return lower.index("front"), lower.index("back"), (lower.index("reading") if "reading" in lower else None)
+            out: dict[str, int | None] = {"front": lower.index("front"), "back": lower.index("back")}
+            for k in OPTIONAL_COLUMNS:
+                out[k] = lower.index(k) if k in lower else None
+            return out
         raise ImportError_("Choose which columns are front and back.")
     width = len(parsed.columns)
 
@@ -172,21 +192,29 @@ def resolve_mapping(parsed: ParsedFile, mapping: dict | None) -> tuple[int, int,
             raise ImportError_(f"Invalid column for {key}.")
         return v
 
-    f, b, r = idx("front", True), idx("back", True), idx("reading", False)
-    if f == b:
+    out = {"front": idx("front", True), "back": idx("back", True)}
+    for k in OPTIONAL_COLUMNS:
+        out[k] = idx(k, False)
+    if out["front"] == out["back"]:
         raise ImportError_("Front and back must be different columns.")
-    return f, b, r
+    return out
 
 
 def import_into_deck(
     conn: sqlite3.Connection, parsed: ParsedFile, deck_id: int, mapping: dict | None, now: str | None = None
 ) -> dict[str, Any]:
-    fi, bi, ri = resolve_mapping(parsed, mapping)
+    m = resolve_mapping(parsed, mapping)
+    fi, bi, ri, si, smi = m["front"], m["back"], m["reading"], m["sentence"], m["sentence_meaning"]
     imported, dupes = 0, 0
     errors: list[dict[str, Any]] = []
     first_row = 2 if parsed.has_header else 1
     with transaction(conn):
-        existing = {r[0] for r in conn.execute("SELECT front FROM cards WHERE deck_id = ?", (deck_id,))}
+        # The same front may appear with a different reading (方 ほう / 方 かた) or meaning
+        # (高い expensive / tall); a card is unique by front + reading + back.
+        existing = {
+            (r[0], r[1] or "", r[2])
+            for r in conn.execute("SELECT front, reading, back FROM cards WHERE deck_id = ?", (deck_id,))
+        }
         base = now or now_iso()
         for n, row in enumerate(parsed.rows):
             rowno = first_row + n
@@ -198,15 +226,19 @@ def import_into_deck(
             if not front or not back:
                 errors.append({"row": rowno, "reason": "empty front or back"})
                 continue
-            if front in existing:
+            key = (front, reading or "", back)
+            if key in existing:
                 dupes += 1
-                errors.append({"row": rowno, "reason": f"duplicate: {front}"})
+                errors.append({"row": rowno, "reason": f"duplicate: {front}" + (f" ({reading})" if reading else "")})
                 continue
-            existing.add(front)
+            existing.add(key)
+            sentence = clean_sentence(row[si]) if si is not None else ""
+            sentence_meaning = clean_field(row[smi]) if smi is not None else ""
             # created_at keeps file order (queue orders new cards by created_at, id).
             conn.execute(
-                "INSERT INTO cards(deck_id, front, back, reading, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-                (deck_id, front, back, reading or None, base, base),
+                "INSERT INTO cards(deck_id, front, back, reading, sentence, sentence_meaning, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (deck_id, front, back, reading or None, sentence or None, sentence_meaning or None, base, base),
             )
             imported += 1
     return {"imported": imported, "skipped_duplicates": dupes, "errors": errors}

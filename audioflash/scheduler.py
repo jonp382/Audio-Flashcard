@@ -181,7 +181,7 @@ def next_card(conn: sqlite3.Connection, deck: sqlite3.Row, now: datetime) -> dic
 
     out_card = None
     if card is not None:
-        out_card = card_to_dict(card)
+        out_card = card_to_dict(card, deck["language"])
         out_card.pop("first_today", None)
         out_card["practice"] = practice
     return {"card": out_card, "counts": counts(conn, deck, now), "next_learning_due_at": next_due}

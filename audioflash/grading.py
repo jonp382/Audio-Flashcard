@@ -32,3 +32,10 @@ def grade_answer(
         g = ollama.grade(front, expected, reading, language, transcript)
         return Grade(score=g.score, feedback=g.feedback)
     raise ValueError(f"unknown deck language {language!r}")
+
+
+def grade_meaning(transcript: str, front: str, back: str, reading: str | None, ollama: OllamaClient) -> Grade:
+    """Meaning step of a two-step card: the English meaning (`back`), graded by the LLM.
+    Raises evaluator.LLMUnavailable / GradingFailed."""
+    g = ollama.grade(front, back, reading, "en", transcript)
+    return Grade(score=g.score, feedback=g.feedback)

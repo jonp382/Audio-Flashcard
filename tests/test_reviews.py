@@ -148,8 +148,17 @@ def test_delete_deck_removes_cards_and_files(core):
         core.list_cards(deck["id"])
 
 
-def test_duplicate_front_rejected(core):
-    d, [c] = setup(core)
+def test_duplicate_card_rejected(core):
+    d, [c] = setup(core)  # 話0 / to speak / はなす
     with pytest.raises(AppError) as e:
-        core.create_card(d["id"], "話0", "x")
+        core.create_card(d["id"], "話0", "to speak", "はなす")
     assert e.value.code == "invalid_input"
+    # same front, different reading (方 ほう / 方 かた) or meaning (高い expensive / tall)
+    core.create_card(d["id"], "話0", "to speak", "わ")
+    core.create_card(d["id"], "話0", "to talk", "はなす")
+    core.create_card(d["id"], "話0", "to speak")  # no reading counts as its own reading
+    with pytest.raises(AppError):
+        core.create_card(d["id"], "話0", "to speak", "")
+    other = core.create_card(d["id"], "別", "x", "べつ")
+    with pytest.raises(AppError):
+        core.update_card(other["id"], {"front": "話0", "back": "to speak", "reading": "はなす"})

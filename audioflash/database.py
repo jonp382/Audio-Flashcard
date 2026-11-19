@@ -101,6 +101,49 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (deck_id, day)
     );
     """,
+    # 2 -> 3: per-step results for two-step cards (reading + meaning). JSON list of
+    # {step, transcript, score, score_original, overridden, feedback}; NULL = one step.
+    """
+    ALTER TABLE reviews ADD COLUMN steps TEXT;
+    """,
+    # 3 -> 4: the same front may appear more than once with a different reading
+    # (方 ほう / 方 かた) or meaning (高い expensive / tall); a card is unique by
+    # front + reading + back. Also adds an example sentence and its translation. SQLite can't drop the old
+    # UNIQUE(deck_id, front), so the table is rebuilt (migrate() turns foreign keys off
+    # around this, so reviews/recordings are kept).
+    """
+    CREATE TABLE cards_new (
+        id INTEGER PRIMARY KEY,
+        deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+        front TEXT NOT NULL,
+        back TEXT NOT NULL,
+        reading TEXT,
+        alt_answers TEXT,
+        state TEXT NOT NULL DEFAULT 'new'
+            CHECK (state IN ('new','learning','review','relearning')),
+        learning_step INTEGER,
+        ease_factor REAL NOT NULL DEFAULT 2.5,
+        interval_days INTEGER NOT NULL DEFAULT 0,
+        repetitions INTEGER NOT NULL DEFAULT 0,
+        due_date TEXT,
+        due_at TEXT,
+        last_review TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        sentence TEXT,
+        sentence_meaning TEXT
+    );
+    INSERT INTO cards_new (id, deck_id, front, back, reading, alt_answers, state, learning_step,
+        ease_factor, interval_days, repetitions, due_date, due_at, last_review, created_at, updated_at)
+    SELECT id, deck_id, front, back, reading, alt_answers, state, learning_step,
+        ease_factor, interval_days, repetitions, due_date, due_at, last_review, created_at, updated_at
+    FROM cards;
+    DROP TABLE cards;
+    ALTER TABLE cards_new RENAME TO cards;
+    CREATE INDEX idx_cards_due_date ON cards (deck_id, state, due_date);
+    CREATE INDEX idx_cards_due_at ON cards (deck_id, state, due_at);
+    CREATE UNIQUE INDEX idx_cards_identity ON cards (deck_id, front, COALESCE(reading, ''), back);
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -132,16 +175,29 @@ def migrate(conn: sqlite3.Connection) -> int:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version > SCHEMA_VERSION:
         raise RuntimeError(f"database is newer (v{version}) than this app (v{SCHEMA_VERSION})")
-    while version < SCHEMA_VERSION:
-        # executescript commits implicitly, so wrap the step and the version bump together.
-        script = f"BEGIN;\n{MIGRATIONS[version]}\nPRAGMA user_version = {version + 1};\nCOMMIT;"
-        try:
-            conn.executescript(script)
-        except BaseException:
-            if conn.in_transaction:
-                conn.execute("ROLLBACK")
-            raise
-        version += 1
+    if version == SCHEMA_VERSION:
+        return version
+    # Table rebuilds (DROP + RENAME) must not cascade-delete child rows, so foreign keys
+    # are off while migrating (SQLite's documented procedure) and checked afterwards.
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        while version < SCHEMA_VERSION:
+            # executescript commits implicitly, so wrap the step, the FK check and the
+            # version bump together.
+            script = f"BEGIN;\n{MIGRATIONS[version]}\nPRAGMA user_version = {version + 1};\n"
+            try:
+                conn.executescript(script)
+                bad = conn.execute("PRAGMA foreign_key_check").fetchall()
+                if bad:
+                    raise RuntimeError(f"migration {version + 1} broke foreign keys: {[tuple(r) for r in bad[:5]]}")
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+            version += 1
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
     return version
 
 
@@ -193,10 +249,30 @@ def deck_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return d
 
 
-def card_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+def card_to_dict(row: sqlite3.Row, language: str | None = None) -> dict[str, Any]:
+    """With the deck `language`, also adds `meaning_step` (the card is reviewed in two
+    steps: reading, then meaning)."""
     d = dict(row)
     d["alt_answers"] = json.loads(d["alt_answers"]) if d.get("alt_answers") else []
+    if language is not None:
+        d["meaning_step"] = has_meaning_step(language, d["back"], d["reading"])
     return d
+
+
+_LATIN_RE = re.compile(r"[A-Za-z]")
+_KANA_RE = re.compile(r"[\u3040-\u30ff]")
+
+
+def has_meaning_step(language: str, back: str | None, reading: str | None) -> bool:
+    """Two-step card: a Japanese-answer deck whose card has a reading (the kana to say)
+    and an English back (the meaning to say). Cards whose back is Japanese stay one step."""
+    back = back or ""
+    return (
+        language == "ja"
+        and bool(reading and reading.strip())
+        and bool(_LATIN_RE.search(back))
+        and not _KANA_RE.search(back)
+    )
 
 
 def get_deck(conn: sqlite3.Connection, deck_id: int) -> sqlite3.Row | None:

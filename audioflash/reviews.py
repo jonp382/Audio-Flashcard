@@ -38,6 +38,33 @@ class Grade:
         return self.score >= 2
 
 
+@dataclass(frozen=True)
+class StepResult:
+    """One step of a two-step card (agent.md §13): 'reading' or 'meaning'."""
+
+    step: str
+    transcript: str
+    grade: Grade
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "step": self.step,
+            "transcript": self.transcript,
+            "score": self.grade.score,
+            "score_original": None,
+            "overridden": False,
+            "feedback": self.grade.feedback,
+        }
+
+
+def combine_steps(steps: list[StepResult]) -> tuple[str, Grade]:
+    """Card-level transcript + grade: the LOWEST step score ("weakest link")."""
+    transcript = " / ".join(s.transcript for s in steps)
+    score = min(s.grade.score for s in steps)
+    feedback = " ".join(f"{s.step.capitalize()}: {s.grade.feedback}" for s in steps)
+    return transcript, Grade(score=score, feedback=feedback)
+
+
 def deck_steps(deck: sqlite3.Row) -> srs.DeckSteps:
     return srs.DeckSteps(json.loads(deck["learning_steps"]), json.loads(deck["relearning_steps"]))
 
@@ -106,6 +133,7 @@ def result_dict(conn: sqlite3.Connection, review_id: int) -> dict[str, Any]:
         "ease_factor": card["ease_factor"],
         "recording_id": r["recording_id"],
         "practice": bool(r["practice"]),
+        "steps": json.loads(r["steps"]) if r["steps"] else None,
     }
 
 
@@ -171,7 +199,9 @@ def record_review(
     grade: Grade,
     ogg: bytes | None,
     now: datetime,
+    steps: list[StepResult] | None = None,
 ) -> dict[str, Any]:
+    """`steps` given: a two-step review; `transcript` and `grade` are the combined ones."""
     stale: list[Path] = []
     new_file: Path | None = None
     try:
@@ -191,8 +221,8 @@ def record_review(
             cur = conn.execute(
                 "INSERT INTO reviews(card_id, deck_id, reviewed_at, transcript, score, is_correct, feedback, "
                 "state_after, interval_after, ease_after, state_before, step_before, ef_before, interval_before, "
-                "reps_before, due_date_before, due_at_before, last_review_before, recording_id, practice) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "reps_before, due_date_before, due_at_before, last_review_before, recording_id, practice, steps) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     card_id,
                     card["deck_id"],
@@ -214,6 +244,7 @@ def record_review(
                     before.last_review,
                     rec_id,
                     int(practice),
+                    json.dumps([s.to_json() for s in steps], ensure_ascii=False) if steps else None,
                 ),
             )
             review_id = cur.lastrowid
@@ -225,7 +256,10 @@ def record_review(
     return result_dict(conn, review_id)
 
 
-def override_grade(conn: sqlite3.Connection, review_id: int, correct: bool) -> dict[str, Any]:
+def override_grade(conn: sqlite3.Connection, review_id: int, correct: bool, step: str | None = None) -> dict[str, Any]:
+    """Mark the review right (3) or wrong (1). On a two-step review, `step` overrides one
+    step and the card score is recomputed as the lowest step score; no `step` overrides
+    every step."""
     with transaction(conn):
         r = conn.execute("SELECT * FROM reviews WHERE id = ?", (review_id,)).fetchone()
         if r is None:
@@ -236,15 +270,35 @@ def override_grade(conn: sqlite3.Connection, review_id: int, correct: bool) -> d
         if latest != review_id:
             raise ReviewError("invalid_input", "Only the card's most recent review can be overridden")
         deck = get_deck(conn, r["deck_id"])
+        steps = json.loads(r["steps"]) if r["steps"] else None
+        if step is not None and (not steps or step not in {s["step"] for s in steps}):
+            raise ReviewError("invalid_input", f"This review has no {step} step")
         score = 3 if correct else 1
+        if steps:
+            for s in steps:
+                if step is None or s["step"] == step:
+                    if s["score_original"] is None:
+                        s["score_original"] = s["score"]
+                    s["score"] = score
+                    s["overridden"] = True
+            score = min(s["score"] for s in steps)
         before = _snapshot_from_review(r)
         after = schedule_after(before, score, deck, from_iso(r["reviewed_at"]), bool(r["practice"]))
         _write_card_state(conn, r["card_id"], after)
         original = r["score_original"] if r["score_original"] is not None else r["score"]
         conn.execute(
             "UPDATE reviews SET score=?, score_original=?, overridden=1, is_correct=?, "
-            "state_after=?, interval_after=?, ease_after=? WHERE id=?",
-            (score, original, int(score >= 2), after.state, after.interval_days, after.ease_factor, review_id),
+            "state_after=?, interval_after=?, ease_after=?, steps=? WHERE id=?",
+            (
+                score,
+                original,
+                int(score >= 2),
+                after.state,
+                after.interval_days,
+                after.ease_factor,
+                json.dumps(steps, ensure_ascii=False) if steps else None,
+                review_id,
+            ),
         )
     return result_dict(conn, review_id)
 

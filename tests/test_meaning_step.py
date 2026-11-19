@@ -1,0 +1,247 @@
+"""Two-step cards: say the reading (graded by reading match), then the meaning (graded
+by the LLM). One SRS update per card; combined score = lowest step score."""
+
+import numpy as np
+import pytest
+
+from audioflash.database import has_meaning_step
+
+from .conftest import FakeSegment, tone
+from .test_bridge import api, code, ja, ja2, ok  # noqa: F401  (fixtures)
+
+
+def say(api, stream_factory, fake_model, card_id, text, step=None):
+    fake_model.next_segments = [FakeSegment(text)]
+    ok(api.start_recording(card_id, step) if step else api.start_recording(card_id))
+    stream_factory.current.feed(tone(1))
+    return api.stop_recording()
+
+
+@pytest.mark.parametrize(
+    "language, back, reading, expected",
+    [
+        ("ja", "to eat", "たべる", True),
+        ("ja", "I (polite, general)", "わたし", True),
+        ("ja", "to eat", None, False),  # nothing to say for the reading
+        ("ja", "to eat", "", False),
+        ("ja", "たべる", "たべる", False),  # back is Japanese
+        ("ja", "eat; たべる", "たべる", False),
+        ("en", "to eat", "たべる", False),  # English-answer decks stay one step
+    ],
+)
+def test_has_meaning_step(language, back, reading, expected):
+    assert has_meaning_step(language, back, reading) is expected
+
+
+def test_cards_report_meaning_step(api, ja, ja2):
+    d, c = ja2
+    assert ok(api.get_next_card(d["id"]))["card"]["meaning_step"] is True
+    assert ok(api.get_card(c["id"]))["meaning_step"] is True
+    assert ok(api.get_card(ja[1]["id"]))["meaning_step"] is False
+
+
+def test_two_step_flow(api, core, stream_factory, fake_model, ollama_fake, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    heard = ok(say(api, stream_factory, fake_model, c["id"], "たべる"))
+    assert heard == {"stage": "heard", "step": "reading", "card_id": c["id"], "transcript": "たべる"}
+    assert fake_model.calls[-1]["language"] == "ja"
+    # Not graded yet: nothing persisted, schedule untouched, ollama not asked to grade.
+    assert ok(api.list_reviews(c["id"])) == []
+    assert core.get_card(c["id"])["state"] == "new"
+    assert "/api/chat" not in ollama_fake.paths_called()
+
+    ollama_fake.reply = {"score": 3, "feedback": "Correct meaning."}
+    r = ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))
+    assert fake_model.calls[-1]["language"] == "en"
+    assert r["score"] == 3 and r["is_correct"]
+    assert [s["step"] for s in r["steps"]] == ["reading", "meaning"]
+    assert [s["score"] for s in r["steps"]] == [3, 3]
+    assert r["steps"][0]["transcript"] == "たべる" and r["steps"][1]["transcript"] == "to eat"
+    assert r["transcript"] == "たべる / to eat"
+    assert r["recording_id"]
+    assert core.get_card(c["id"])["state"] == "learning"
+    # the meaning grader got the card's meaning, not the kana
+    body = [b for p, b in ollama_fake.requests if p == "/api/chat"][-1]
+    assert "Expected answer (back): to eat" in body["messages"][1]["content"]
+    hist = ok(api.list_reviews(c["id"]))
+    assert len(hist) == 1 and hist[0]["steps"][1]["feedback"] == "Correct meaning."
+
+
+def test_one_review_saves_both_clips_as_one_recording(api, core, stream_factory, fake_model, ja2):
+    d, c = ja2
+    sizes = []
+    core.encoder = lambda samples: sizes.append(samples.size) or b"OggS-fake"
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "たべる"))
+    ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))
+    assert len(ok(api.list_recordings(c["id"]))) == 1
+    assert sizes[0] > 2 * 16000  # reading + gap + meaning
+
+
+def test_weakest_step_decides(api, core, stream_factory, fake_model, ollama_fake, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "のむ"))  # wrong reading
+    ollama_fake.reply = {"score": 3, "feedback": "Correct."}
+    r = ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))
+    assert [s["score"] for s in r["steps"]] == [1, 3]
+    assert r["score"] == 1 and not r["is_correct"]
+
+
+def test_rerecord_reading_replaces_it(api, core, stream_factory, fake_model, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    assert ok(say(api, stream_factory, fake_model, c["id"], "たべぺ"))["transcript"] == "たべぺ"
+    assert ok(say(api, stream_factory, fake_model, c["id"], "たべる", "reading"))["transcript"] == "たべる"
+    r = ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))
+    assert r["steps"][0]["transcript"] == "たべる" and r["steps"][0]["score"] == 3
+
+
+def test_meaning_needs_reading_first(api, core, stream_factory, fake_model, ja, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    assert code(api.start_recording(c["id"], "meaning")) == "invalid_input"
+    assert code(api.start_recording(c["id"], "bogus")) == "invalid_input"
+    # a reading heard for another card doesn't count
+    other = ok(api.create_card(d["id"], "飲む", "to drink", "のむ"))
+    ok(say(api, stream_factory, fake_model, other["id"], "のむ"))
+    assert code(api.start_recording(c["id"], "meaning")) == "invalid_input"
+
+
+def test_one_step_card_ignores_step(api, core, stream_factory, fake_model, ja):
+    d, c = ja
+    ok(api.begin_session(d["id"]))
+    r = ok(say(api, stream_factory, fake_model, c["id"], "はなす", "reading"))
+    assert r["score"] == 3 and r["steps"] is None
+
+
+def test_cancel_meaning_keeps_reading(api, core, stream_factory, fake_model, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "たべる"))
+    ok(api.start_recording(c["id"], "meaning"))
+    ok(api.cancel_recording())
+    r = ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))
+    assert r["steps"][0]["transcript"] == "たべる"
+
+
+def test_no_speech_on_meaning_keeps_reading(api, core, stream_factory, fake_model, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "たべる"))
+    ok(api.start_recording(c["id"], "meaning"))
+    stream_factory.current.feed(np.zeros(16000, dtype=np.float32))
+    assert code(api.stop_recording()) == "no_speech"
+    assert ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))["score"] == 3
+
+
+def test_two_step_needs_ollama_before_reading(api, ollama_fake, ja2):
+    d, c = ja2
+    ollama_fake.down = True
+    assert code(api.start_recording(c["id"])) == "llm_unavailable"
+
+
+def test_two_step_deck_warms_up_ollama(api, ollama_fake, ja2):
+    import time
+
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    for _ in range(100):
+        if "/api/generate" in ollama_fake.paths_called():
+            break
+        time.sleep(0.01)
+    assert "/api/generate" in ollama_fake.paths_called()
+
+
+def test_meaning_grading_failed_then_retry(api, core, stream_factory, fake_model, ollama_fake, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "たべる"))
+    ollama_fake.reply = "garbage"
+    assert code(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning")) == "grading_failed"
+    assert ok(api.list_reviews(c["id"])) == []
+    ollama_fake.reply = {"score": 2, "feedback": "Close."}
+    r = ok(api.retry_grading())
+    assert [s["score"] for s in r["steps"]] == [3, 2] and r["score"] == 2
+    assert r["steps"][0]["transcript"] == "たべる"
+
+
+def test_override_one_step(api, core, stream_factory, fake_model, ollama_fake, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "のむ"))  # misheard as a different word
+    ollama_fake.reply = {"score": 3, "feedback": "Correct."}
+    r = ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))
+    assert r["score"] == 1
+    o = ok(api.override_grade(r["review_id"], True, "reading"))
+    assert [s["score"] for s in o["steps"]] == [3, 3]
+    assert o["steps"][0]["overridden"] and o["steps"][0]["score_original"] == 1
+    assert not o["steps"][1]["overridden"]
+    assert o["score"] == 3 and o["score_original"] == 1 and o["is_correct"]
+    o = ok(api.override_grade(r["review_id"], False, "meaning"))
+    assert [s["score"] for s in o["steps"]] == [3, 1] and o["score"] == 1
+    assert o["steps"][1]["score_original"] == 3
+    # schedule recomputed from the snapshot each time, never compounded
+    assert core.get_card(c["id"])["state"] == "learning"
+    assert code(api.override_grade(r["review_id"], True, "bogus")) == "invalid_input"
+
+
+def test_override_whole_card_sets_every_step(api, core, stream_factory, fake_model, ollama_fake, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "たべる"))
+    r = ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))
+    o = ok(api.override_grade(r["review_id"], False))
+    assert [s["score"] for s in o["steps"]] == [1, 1] and o["score"] == 1
+
+
+def test_step_override_refused_on_one_step_review(api, core, stream_factory, fake_model, ja):
+    d, c = ja
+    ok(api.begin_session(d["id"]))
+    r = ok(say(api, stream_factory, fake_model, c["id"], "はなす"))
+    assert code(api.override_grade(r["review_id"], True, "reading")) == "invalid_input"
+
+
+def test_undo_two_step_review(api, core, stream_factory, fake_model, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "たべる"))
+    ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))
+    assert ok(api.undo_last_review())["card_id"] == c["id"]
+    assert core.get_card(c["id"])["state"] == "new"
+    assert ok(api.list_reviews(c["id"])) == [] and ok(api.list_recordings(c["id"])) == []
+    # the old reading is gone: the card starts again from the reading step
+    assert code(api.start_recording(c["id"], "meaning")) == "invalid_input"
+
+
+def test_end_session_drops_heard_reading(api, core, stream_factory, fake_model, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "たべる"))
+    ok(api.end_session())
+    ok(api.begin_session(d["id"]))
+    assert code(api.start_recording(c["id"], "meaning")) == "invalid_input"
+
+
+def test_shared_front_needs_the_right_reading(api, core, stream_factory, fake_model, ja2):
+    """方 ほう / 方 かた: a bare 方 transcript can't prove which reading was said."""
+    d, _ = ja2
+    hou = ok(api.create_card(d["id"], "方", "direction, side", "ほう"))
+    kata = ok(api.create_card(d["id"], "方", "person (polite form)", "かた"))
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, kata["id"], "方"))
+    r = ok(say(api, stream_factory, fake_model, kata["id"], "person", "meaning"))
+    assert r["steps"][0]["score"] < 3
+    ok(say(api, stream_factory, fake_model, kata["id"], "かた"))
+    r = ok(say(api, stream_factory, fake_model, kata["id"], "person", "meaning"))
+    assert r["steps"][0]["score"] == 3
+    assert hou["id"] != kata["id"]
+
+
+def test_unique_front_keeps_kanji_shortcut(api, core, stream_factory, fake_model, ja2):
+    d, c = ja2
+    ok(api.begin_session(d["id"]))
+    ok(say(api, stream_factory, fake_model, c["id"], "食べる"))
+    r = ok(say(api, stream_factory, fake_model, c["id"], "to eat", "meaning"))
+    assert r["steps"][0]["score"] == 3

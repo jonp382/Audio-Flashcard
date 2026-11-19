@@ -11,19 +11,23 @@ export function createMockApi(): PyApi {
     { id: 2, name: 'Kanji meanings', language: 'en', new_per_day: 20, reviews_per_day: 200, learning_steps: [1, 10], relearning_steps: [10], created_at: now() },
   ]
   const mk = (deck_id: number, front: string, back: string, reading: string | null): Card => ({
-    id: ++ids, deck_id, front, back, reading, alt_answers: [], state: 'new', learning_step: null, ease_factor: 2.5,
+    id: ++ids, deck_id, front, back, reading, alt_answers: [], sentence: null, sentence_meaning: null, state: 'new', learning_step: null, ease_factor: 2.5,
     interval_days: 0, repetitions: 0, due_date: null, due_at: null, last_review: null, created_at: now(), updated_at: now(),
+    meaning_step: deck_id === 1 && !!reading && /[A-Za-z]/.test(back),
   })
   const cards: Card[] = [
     mk(1, '話す', 'to speak', 'はなす'),
     mk(1, '食べる', 'to eat', 'たべる'),
     mk(1, '飲む', 'to drink', 'のむ'),
+    { ...mk(1, '方', 'person (polite form)', 'かた'), sentence: '次の<b>方</b>、どうぞ。', sentence_meaning: 'The next person, please.' },
     mk(2, '山', 'mountain', 'やま'),
   ]
   let settings: Settings = { ollama_host: 'localhost', ollama_port: 11434, llm_model: 'qwen3:8b', whisper_device: 'cpu', mic_device: null, record_mode: 'toggle', mic_gain: 1 }
   let mic = false
   let recStart: number | null = null
   let recCard: number | null = null
+  let recStep: string | null = null
+  let heardReading: string | null = null
   const done = new Set<number>()
   let reviewId = 0
   let dl = { state: 'idle' as 'idle' | 'downloading' | 'done' | 'error', bytes_done: 0, bytes_total: 485_000_000, error: null }
@@ -62,7 +66,7 @@ export function createMockApi(): PyApi {
     end_session: () => { mic = false; return ok() },
     open_mic: () => { mic = true; return ok() },
     close_mic: () => { mic = false; return ok() },
-    start_recording: (cardId: number) => { if (recStart) return fail('busy', 'Already recording'); recStart = Date.now(); recCard = cardId; mic = true; return ok() },
+    start_recording: (cardId: number, step?: string) => { if (recStart) return fail('busy', 'Already recording'); recStart = Date.now(); recCard = cardId; recStep = step ?? null; mic = true; return ok() },
     get_recording_status: () => { const el = recStart ? Math.min(15, (Date.now() - recStart) / 1000) : 0; return ok({ mic_open: mic, recording: recStart !== null, elapsed_s: el, level: Math.min(1, (recStart ? 0.35 + Math.random() * 0.3 : 0.15 + Math.random() * 0.1) + Math.log10(settings.mic_gain) / 3), peak: 0.5, clipping: false, capped: el >= 15 }) },
     mic_test_start: () => { recStart = Date.now(); recCard = null; return ok() },
     mic_test_stop: () => { recStart = null; return ok({ seconds: 3.2, level: 0.45, peak: 0.6, gate_level: 0.2, too_quiet: false, clipping: false, transcript: 'べんきょう', transcript_note: null }) },
@@ -75,8 +79,22 @@ export function createMockApi(): PyApi {
       setTimeout(() => {
         if (Math.random() < 0.15) return resolve({ ok: false, error: { code: 'no_speech', message: "Didn't catch that, try again." } })
         const right = Math.random() < 0.6
+        if (card.meaning_step && recStep !== 'meaning') {
+          heardReading = right ? card.reading : 'おばさん'
+          return resolve({ ok: true, data: { stage: 'heard', step: 'reading', card_id: card.id, transcript: heardReading } })
+        }
         done.add(card.id)
-        const r: ReviewResult = { review_id: ++reviewId, card_id: card.id, deck_id: card.deck_id, transcript: right ? (card.reading ?? card.back) : 'おばさん', score: right ? 3 : 2, score_original: null, overridden: false, is_correct: true, feedback: right ? 'Correct' : `You said おばさん, expected ${card.reading} (long vowel missing)`, expected: { front: card.front, back: card.back, reading: card.reading, alt_answers: card.alt_answers }, state: 'learning', next_due: new Date(Date.now() + 600_000).toISOString(), interval_days: 0, ease_factor: 2.5, recording_id: reviewId, practice: false }
+        const r: ReviewResult = { review_id: ++reviewId, card_id: card.id, deck_id: card.deck_id, transcript: right ? (card.reading ?? card.back) : 'おばさん', score: right ? 3 : 2, score_original: null, overridden: false, is_correct: true, feedback: right ? 'Correct' : `You said おばさん, expected ${card.reading} (long vowel missing)`, expected: { front: card.front, back: card.back, reading: card.reading, alt_answers: card.alt_answers }, state: 'learning', next_due: new Date(Date.now() + 600_000).toISOString(), interval_days: 0, ease_factor: 2.5, recording_id: reviewId, practice: false, steps: null }
+        if (card.meaning_step) {
+          const rs = heardReading === card.reading ? 3 : 1
+          const ms = right ? 3 : 2
+          r.steps = [
+            { step: 'reading', transcript: heardReading ?? '', score: rs, score_original: null, overridden: false, feedback: rs === 3 ? 'Correct' : `Expected ${card.reading}` },
+            { step: 'meaning', transcript: right ? card.back : 'to talk', score: ms, score_original: null, overridden: false, feedback: right ? 'Correct meaning.' : 'Close, but not quite.' },
+          ]
+          r.score = Math.min(rs, ms) as 1 | 2 | 3
+          r.transcript = `${heardReading} / ${r.steps[1].transcript}`
+        }
         resolve({ ok: true, data: r })
       }, 900)
     }),

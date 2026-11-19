@@ -59,6 +59,8 @@ export interface Card {
   back: string
   reading: string | null
   alt_answers: string[]
+  sentence: string | null // example sentence; the card's word may be wrapped in <b>…</b>
+  sentence_meaning: string | null // its translation (shown only after answering)
   state: CardStateName
   learning_step: number | null
   ease_factor: number
@@ -70,6 +72,8 @@ export interface Card {
   created_at: string
   updated_at: string
   practice?: boolean // shown as part of a practice pass (only from get_next_card)
+  // Two-step card: say the reading, then the meaning (from get_next_card / get_card)
+  meaning_step?: boolean
 }
 
 export interface NextCard {
@@ -137,6 +141,25 @@ export interface MicTestResult {
   transcript_note: string | null
 }
 
+export type AnswerStep = 'reading' | 'meaning'
+
+export interface StepResult {
+  step: AnswerStep
+  transcript: string
+  score: 0 | 1 | 2 | 3
+  score_original: number | null
+  overridden: boolean
+  feedback: string
+}
+
+/** stop_recording after the reading step of a two-step card: transcribed, not graded. */
+export interface HeardResult {
+  stage: 'heard'
+  step: 'reading'
+  card_id: number
+  transcript: string
+}
+
 export interface ReviewResult {
   review_id: number
   card_id: number
@@ -154,6 +177,7 @@ export interface ReviewResult {
   ease_factor: number
   recording_id: number | null
   practice: boolean
+  steps: StepResult[] | null // two-step cards; score is then the lowest step score
 }
 
 export interface ReviewHistoryRow {
@@ -170,6 +194,7 @@ export interface ReviewHistoryRow {
   interval_after: number
   ease_after: number
   recording_id: number | null
+  steps: StepResult[] | null
 }
 
 export interface ImportPreview {
@@ -183,6 +208,8 @@ export interface ImportMapping {
   front: number
   back: number
   reading: number | null
+  sentence: number | null
+  sentence_meaning: number | null
 }
 
 export interface ImportResult {
@@ -261,9 +288,19 @@ export const api = {
   deleteDeck: (deckId: number) => call<null>('delete_deck', deckId),
   listCards: (deckId: number) => call<Card[]>('list_cards', deckId),
   getCard: (cardId: number) => call<Card>('get_card', cardId),
-  createCard: (deckId: number, front: string, back: string, reading: string | null, altAnswers: string[]) =>
-    call<Card>('create_card', deckId, front, back, reading, altAnswers),
-  updateCard: (cardId: number, patch: Partial<Pick<Card, 'front' | 'back' | 'reading' | 'alt_answers'>>) =>
+  createCard: (
+    deckId: number,
+    front: string,
+    back: string,
+    reading: string | null,
+    altAnswers: string[],
+    sentence: string | null = null,
+    sentenceMeaning: string | null = null,
+  ) => call<Card>('create_card', deckId, front, back, reading, altAnswers, sentence, sentenceMeaning),
+  updateCard: (
+    cardId: number,
+    patch: Partial<Pick<Card, 'front' | 'back' | 'reading' | 'alt_answers' | 'sentence' | 'sentence_meaning'>>,
+  ) =>
     call<Card>('update_card', cardId, patch),
   deleteCard: (cardId: number) => call<null>('delete_card', cardId),
   getCustomStudyOptions: (deckId: number) => call<CustomStudyOptions>('get_custom_study_options', deckId),
@@ -280,12 +317,14 @@ export const api = {
   endSession: () => call<null>('end_session'),
   openMic: () => call<null>('open_mic'),
   closeMic: () => call<null>('close_mic'),
-  startRecording: (cardId: number) => call<null>('start_recording', cardId),
+  startRecording: (cardId: number, step?: AnswerStep) =>
+    step ? call<null>('start_recording', cardId, step) : call<null>('start_recording', cardId),
   getRecordingStatus: () => call<RecordingStatus>('get_recording_status'),
   cancelRecording: () => call<null>('cancel_recording'),
-  stopRecording: () => call<ReviewResult>('stop_recording'),
+  stopRecording: () => call<ReviewResult | HeardResult>('stop_recording'),
   retryGrading: () => call<ReviewResult>('retry_grading'),
-  overrideGrade: (reviewId: number, correct: boolean) => call<ReviewResult>('override_grade', reviewId, correct),
+  overrideGrade: (reviewId: number, correct: boolean, step?: AnswerStep) =>
+    step ? call<ReviewResult>('override_grade', reviewId, correct, step) : call<ReviewResult>('override_grade', reviewId, correct),
   undoLastReview: () => call<{ card_id: number; deck_id: number }>('undo_last_review'),
   // mic test
   micTestStart: () => call<null>('mic_test_start'),

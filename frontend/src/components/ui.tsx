@@ -87,3 +87,27 @@ export function CountBadges({ counts, size = 'sm' }: { counts?: Counts; size?: '
 export function Spinner({ className = '' }: { className?: string }) {
   return <span className={`inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent ${className}`} />
 }
+
+/** Example sentence with the card's word emphasised. Imported sentences mark it with
+ *  <b>…</b>; otherwise occurrences of `word` are emphasised. Rendered as text only. */
+export function Sentence({ text, word, className = '' }: { text: string; word?: string; className?: string }) {
+  let parts: { t: string; b: boolean }[]
+  if (/<b>/.test(text)) {
+    parts = text.split(/(<b>.*?<\/b>)/).map((t) => (t.startsWith('<b>') ? { t: t.slice(3, -4), b: true } : { t, b: false }))
+  } else if (word && text.includes(word)) {
+    parts = text.split(word).flatMap((t, i) => (i === 0 ? [{ t, b: false }] : [{ t: word, b: true }, { t, b: false }]))
+  } else {
+    parts = [{ t: text, b: false }]
+  }
+  return (
+    <span className={`jp ${className}`}>
+      {parts.map((p, i) =>
+        p.b ? (
+          <strong key={i} className="font-semibold text-indigo-700">{p.t.replace(/<\/?b>/g, '')}</strong>
+        ) : (
+          <span key={i}>{p.t.replace(/<\/?b>/g, '')}</span>
+        ),
+      )}
+    </span>
+  )
+}

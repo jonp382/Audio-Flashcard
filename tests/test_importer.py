@@ -39,7 +39,9 @@ def test_delimiter_sniffing(delim):
 def test_header_row_detected():
     p = parse_text("front,back,reading\n話す,to speak,はなす\n")
     assert p.has_header and p.columns == ["front", "back", "reading"]
-    assert importer.resolve_mapping(p, None) == (0, 1, 2)
+    assert importer.resolve_mapping(p, None) == {
+        "front": 0, "back": 1, "reading": 2, "sentence": None, "sentence_meaning": None
+    }
 
 
 def test_no_header_requires_mapping():
@@ -95,7 +97,7 @@ def pick(core, path: Path):
 
 
 def test_full_import_with_mapping(core, deck, tmp_path):
-    p = write(tmp_path, "cards.csv", "猫,cat,ねこ\n犬,dog,いぬ\n,empty,x\n猫,dup,ねこ\n")
+    p = write(tmp_path, "cards.csv", "猫,cat,ねこ\n犬,dog,いぬ\n,empty,x\n猫,cat,ねこ\n")
     path = pick(core, p)
     prev = core.import_preview(path)
     assert prev["total_rows"] == 4 and prev["detected"]["delimiter"] == "comma"
@@ -169,3 +171,47 @@ def test_cp932_file_import(core, deck, tmp_path):
     path = pick(core, write(tmp_path, "sj.csv", "猫,ねこ\n".encode("cp932")))
     assert core.import_preview(path)["detected"]["encoding"] == "cp932"
     assert core.import_cards(path, deck["id"], {"front": 0, "back": 1})["imported"] == 1
+
+
+def test_kaishi_style_same_front_two_readings_with_sentences(core, deck, tmp_path):
+    # Rows shaped like Kaishi 1.5k: word, reading, meaning, furigana, audio, sentence, translation
+    text = (
+        "#separator:tab\n#html:true\n"
+        "方\tほう\tdirection, side\t方[ほう]\t[sound:a.mp3]\t彼は私の<b>方</b>を見ました。\tHe looked in my direction.\n"
+        "方\tかた\tperson (polite form)\t方[かた]\t[sound:b.mp3]\t次の<b>方</b>、どうぞ。\tThe next person, please.\n"
+        "方\tかた\tperson (polite form)\t\t\t\t\n"
+        "高い\tたかい\texpensive\t\t\tこの時計は<b>高い</b>。\tThis watch is expensive.\n"
+        "高い\tたかい\thigh, tall\t\t\tあの山は<b>高い</b>。\tThat mountain is high.\n"
+    )
+    path = pick(core, write(tmp_path, "kaishi.txt", text))
+    res = core.import_cards(
+        path, deck["id"], {"front": 0, "back": 2, "reading": 1, "sentence": 5, "sentence_meaning": 6}
+    )
+    assert res["imported"] == 4 and res["skipped_duplicates"] == 1
+    assert res["errors"][0]["reason"] == "duplicate: 方 (かた)"
+    a, b, t1, t2 = core.list_cards(deck["id"])
+    assert (t1["back"], t2["back"]) == ("expensive", "high, tall")
+    assert (a["front"], a["reading"], a["back"]) == ("方", "ほう", "direction, side")
+    assert (b["front"], b["reading"], b["back"]) == ("方", "かた", "person (polite form)")
+    assert b["sentence"] == "次の<b>方</b>、どうぞ。"
+    assert b["sentence_meaning"] == "The next person, please."
+
+
+def test_sentence_columns_optional(core, deck, tmp_path):
+    path = pick(core, write(tmp_path, "c.csv", "猫,cat,ねこ\n"))
+    core.import_cards(path, deck["id"], {"front": 0, "back": 1, "reading": 2})
+    c = core.list_cards(deck["id"])[0]
+    assert c["sentence"] is None and c["sentence_meaning"] is None
+
+
+@pytest.mark.parametrize(
+    "raw, clean",
+    [
+        ("<b>私</b>はアンです。", "<b>私</b>はアンです。"),
+        ("<B>猫</B>が<span style='x'>いる</span>[sound:s.mp3]", "<b>猫</b>がいる"),
+        ("a &lt;script&gt; b", "a script b"),  # no tags other than <b> survive
+        ("<b>私[わたし]</b>は", "<b>私[わたし]</b>は"),
+    ],
+)
+def test_clean_sentence(raw, clean):
+    assert importer.clean_sentence(raw) == clean

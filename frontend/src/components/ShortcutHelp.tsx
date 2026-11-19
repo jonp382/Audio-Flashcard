@@ -5,8 +5,11 @@ const rows: [string, string][] = [
   ['Esc', 'Cancel the current recording'],
   ['Enter', 'Next card (on the result screen)'],
   ['R', 'Replay your last recording'],
-  ['1', 'I was wrong'],
-  ['2', 'I was right'],
+  ['Backspace', 'Re-record the reading (two-step cards, before the meaning)'],
+  ['1', 'I was wrong (two-step cards: reading wrong)'],
+  ['2', 'I was right (two-step cards: reading right)'],
+  ['3', 'Two-step cards: meaning wrong'],
+  ['4', 'Two-step cards: meaning right'],
   [isMac ? '⌘ Z' : 'Ctrl Z', 'Undo last review'],
   ['?', 'Show / hide this help'],
 ]
