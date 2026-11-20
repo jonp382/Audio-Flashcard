@@ -850,14 +850,22 @@ class Core:
             except reviews.ReviewError as e:
                 raise AppError(e.code, e.message) from e
 
-    def undo_last_review(self) -> dict:
-        with self._state_lock:
-            self._heard = None
+    def get_last_review(self) -> dict | None:
+        with self.db() as conn:
+            return reviews.last_review(conn)
+
+    def undo_last_review(self, review_id: int | None = None) -> dict:
         with self.review_lock(), self.db() as conn:
             try:
-                return reviews.undo_last_review(conn, self.paths)
+                out = reviews.undo_last_review(conn, self.paths, review_id)
             except reviews.ReviewError as e:
                 raise AppError(e.code, e.message) from e
+        with self._state_lock:
+            # A reading heard for the restored card is stale; one for another card (e.g.
+            # after undoing a review in another deck) is still the user's current answer.
+            if self._heard is not None and self._heard.card_id == out["card_id"]:
+                self._heard = None
+        return out
 
     def get_card(self, card_id: int) -> dict:
         with self.db() as conn:

@@ -303,12 +303,37 @@ def override_grade(conn: sqlite3.Connection, review_id: int, correct: bool, step
     return result_dict(conn, review_id)
 
 
-def undo_last_review(conn: sqlite3.Connection, paths: DataPaths) -> dict[str, int]:
+def last_review(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    """The review undo would revert next (the newest in the whole app), so the UI can
+    ask before undoing one from another deck. Read-only."""
+    r = conn.execute(
+        "SELECT r.id, r.card_id, r.deck_id, r.reviewed_at, c.front, c.reading, d.name AS deck_name "
+        "FROM reviews r JOIN cards c ON c.id = r.card_id JOIN decks d ON d.id = r.deck_id "
+        "ORDER BY r.id DESC LIMIT 1"
+    ).fetchone()
+    if r is None:
+        return None
+    return {
+        "review_id": r["id"],
+        "card_id": r["card_id"],
+        "deck_id": r["deck_id"],
+        "deck_name": r["deck_name"],
+        "front": r["front"],
+        "reading": r["reading"],
+        "reviewed_at": r["reviewed_at"],
+    }
+
+
+def undo_last_review(conn: sqlite3.Connection, paths: DataPaths, review_id: int | None = None) -> dict[str, int]:
+    """`review_id`: only undo if that is still the newest review (the one the user
+    confirmed), so a review logged in between is never undone by mistake."""
     files: list[Path] = []
     with transaction(conn):
         r = conn.execute("SELECT * FROM reviews ORDER BY id DESC LIMIT 1").fetchone()
         if r is None:
             raise ReviewError("not_found", "Nothing to undo")
+        if review_id is not None and r["id"] != review_id:
+            raise ReviewError("invalid_input", "Another review was made since; nothing was undone")
         card = get_card(conn, r["card_id"])
         if card["updated_at"] > r["reviewed_at"]:
             raise ReviewError("invalid_input", "The card was edited after this review; undo is not possible")

@@ -170,6 +170,17 @@ export interface HeardResult {
   skipped?: boolean // "I don't know": nothing recorded, the reading will score 0
 }
 
+/** The review that undo would revert next (the newest in the whole app). */
+export interface LastReview {
+  review_id: number
+  card_id: number
+  deck_id: number
+  deck_name: string
+  front: string
+  reading: string | null
+  reviewed_at: string
+}
+
 export interface ReviewResult {
   review_id: number
   card_id: number
@@ -380,7 +391,12 @@ export const api = {
     step ? call<ReviewResult | HeardResult>('dont_know', cardId, step) : call<ReviewResult | HeardResult>('dont_know', cardId),
   overrideGrade: (reviewId: number, correct: boolean, step?: AnswerStep) =>
     step ? call<ReviewResult>('override_grade', reviewId, correct, step) : call<ReviewResult>('override_grade', reviewId, correct),
-  undoLastReview: () => call<{ card_id: number; deck_id: number }>('undo_last_review'),
+  getLastReview: () => call<LastReview | null>('get_last_review'),
+  /** With `reviewId`, only undoes if that is still the newest review (invalid_input otherwise). */
+  undoLastReview: (reviewId?: number) =>
+    reviewId === undefined
+      ? call<{ card_id: number; deck_id: number }>('undo_last_review')
+      : call<{ card_id: number; deck_id: number }>('undo_last_review', reviewId),
   // mic test
   micTestStart: () => call<null>('mic_test_start'),
   micTestStop: (language: Language) => call<MicTestResult>('mic_test_stop', language),

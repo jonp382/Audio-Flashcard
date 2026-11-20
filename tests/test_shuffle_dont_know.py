@@ -176,3 +176,33 @@ def test_dont_know_while_recording_is_busy(api, core, stream_factory, ja):
 def test_dont_know_bad_step(core, ja):
     with pytest.raises(AppError):
         core.dont_know(ja[1]["id"], "both")
+
+
+# --- undo across decks ------------------------------------------------------------------
+
+
+def test_last_review_peek_and_guarded_undo(api, core, ja, ja2):
+    (d1, c1), (d2, c2) = ja, ja2
+    assert ok(api.get_last_review()) is None
+    r1 = ok(api.dont_know(c1["id"]))
+    ok(api.dont_know(c2["id"]))  # skipped reading: nothing logged yet
+    last = ok(api.get_last_review())
+    assert last["review_id"] == r1["review_id"] and last["deck_id"] == d1["id"]
+    assert last["deck_name"] == "JA" and last["front"] == "話す"
+    r2 = ok(api.dont_know(c2["id"], "meaning"))
+    # the UI confirmed undoing r1, but r2 was logged since: refused, nothing changed
+    assert code(api.undo_last_review(r1["review_id"])) == "invalid_input"
+    assert ok(api.get_last_review())["review_id"] == r2["review_id"]
+    assert ok(api.undo_last_review(r2["review_id"]))["deck_id"] == d2["id"]
+    assert ok(api.undo_last_review())["deck_id"] == d1["id"]  # unguarded still works
+    assert code(api.undo_last_review("x")) == "invalid_input"
+
+
+def test_undo_in_another_deck_keeps_current_heard_reading(api, core, stream_factory, fake_model, ja, ja2):
+    (d1, c1), (d2, c2) = ja, ja2
+    ok(api.dont_know(c1["id"]))  # a review in deck 1
+    ok(api.begin_session(d2["id"]))
+    ok(say(api, stream_factory, fake_model, c2["id"], "たべる"))  # reading heard in deck 2
+    ok(api.undo_last_review())  # undoes deck 1's review
+    r = ok(api.dont_know(c2["id"], "meaning"))  # the heard reading survived
+    assert [s["score"] for s in r["steps"]] == [3, 0]

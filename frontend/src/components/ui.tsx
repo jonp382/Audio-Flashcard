@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import { useEffect, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import type { Counts } from '../api'
 
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost' | 'success'
@@ -81,6 +81,47 @@ export function CountBadges({ counts, size = 'sm' }: { counts?: Counts; size?: '
       <span className="text-emerald-600" title="Review">{counts.review}</span>
       {!!counts.practice && <span className="text-violet-600" title="Practice (cards studied today)">+{counts.practice}</span>}
     </span>
+  )
+}
+
+/** Yes/No confirmation. "No" is the default: it has focus (Enter picks it), and Esc or a
+ *  click outside the dialog also answer No. */
+export function ConfirmDialog({
+  title,
+  children,
+  yesLabel,
+  noLabel = 'No',
+  onYes,
+  onNo,
+}: {
+  title: string
+  children: ReactNode
+  yesLabel: string
+  noLabel?: string
+  onYes: () => void
+  onNo: () => void
+}) {
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onNo()
+      }
+    }
+    window.addEventListener('keydown', esc)
+    return () => window.removeEventListener('keydown', esc)
+  }, [onNo])
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onNo}>
+      <div role="alertdialog" aria-modal="true" aria-label={title} className="w-[30rem] space-y-4 rounded-xl bg-surface p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <div className="space-y-2 text-sm text-slate-600">{children}</div>
+        <div className="flex justify-end gap-2">
+          <Button onClick={onYes}>{yesLabel}</Button>
+          <Button variant="primary" onClick={onNo} autoFocus>{noLabel}</Button>
+        </div>
+      </div>
+    </div>
   )
 }
 

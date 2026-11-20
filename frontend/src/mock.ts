@@ -121,6 +121,7 @@ export function createMockApi(): PyApi {
       return ok(r)
     },
     override_grade: (id: number, correct: boolean) => ok({ review_id: id, score: correct ? 3 : 1, is_correct: correct, overridden: true, score_original: 2 }),
+    get_last_review: () => { const last = [...done].pop(); if (last === undefined) return ok(null); const c = cards.find((x) => x.id === last)!; return ok({ review_id: reviewId, card_id: c.id, deck_id: c.deck_id, deck_name: decks.find((d) => d.id === c.deck_id)!.name, front: c.front, reading: c.reading, reviewed_at: now() }) },
     undo_last_review: () => { const last = [...done].pop(); if (last === undefined) return fail('not_found', 'Nothing to undo'); done.delete(last); return ok({ card_id: last, deck_id: cards.find((c) => c.id === last)!.deck_id }) },
     list_reviews: () => ok([]),
     list_recordings: () => ok([]),

@@ -7,6 +7,7 @@ import {
   type Card,
   type Counts,
   type Deck,
+  type LastReview,
   type RecordingStatus,
   type ReviewResult,
   type Settings,
@@ -15,7 +16,7 @@ import {
 import { formatDue, formatDuration, isMac, SCORE_LABEL } from '../format'
 import { CustomStudyDialog } from './CustomStudyDialog'
 import { ShortcutHelp } from './ShortcutHelp'
-import { Button, CountBadges, Sentence, Spinner } from './ui'
+import { Button, ConfirmDialog, CountBadges, Sentence, Spinner } from './ui'
 
 type Phase = 'loading' | 'question' | 'recording' | 'grading' | 'result' | 'retry' | 'done'
 
@@ -35,6 +36,8 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
   const [canContinue, setCanContinue] = useState(false)
   const [undoable, setUndoable] = useState(false)
   const [customOpen, setCustomOpen] = useState(false)
+  // Undo would revert a review from ANOTHER deck: asked first (default No).
+  const [confirmUndo, setConfirmUndo] = useState<LastReview | null>(null)
   // Two-step cards: which answer is being recorded, and what Whisper heard for the reading.
   const [step, setStep] = useState<AnswerStep>('reading')
   const [heard, setHeard] = useState<string | null>(null)
@@ -280,29 +283,51 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
     if (r?.recording_id) api.playRecording(r.recording_id).catch((e) => setNotice({ kind: 'error', text: errorMessage(e) }))
   }, [])
 
-  const undo = useCallback(async () => {
-    if (phaseRef.current === 'recording' || phaseRef.current === 'grading') return
-    try {
-      const u = await api.undoLastReview()
-      const [c, n] = await Promise.all([api.getCard(u.card_id), api.getNextCard(deck.id)])
-      setCounts(n.counts)
-      setResult(null)
-      setStep('reading')
-      setHeard(null)
-      if (c.deck_id === deck.id) {
+  /** Undo `last` (checked by id, so a review logged in between is never undone). Only a
+   *  card from this deck replaces the current screen; undoing another deck's review
+   *  leaves the card you're on (and any reading you've recorded) as it is. */
+  const performUndo = useCallback(
+    async (last: LastReview) => {
+      try {
+        const u = await api.undoLastReview(last.review_id)
+        if (u.deck_id !== deck.id) {
+          setNotice({ kind: 'info', text: `Undid your review of ${last.front} in “${last.deck_name}”.` })
+          return
+        }
+        const [c, n] = await Promise.all([api.getCard(u.card_id), api.getNextCard(deck.id)])
+        setCounts(n.counts)
+        setResult(null)
+        setStep('reading')
+        setHeard(null)
         setCard(c)
         setPhase('question')
         setNotice({ kind: 'info', text: 'Review undone. Answer this card again.' })
-      } else {
-        setNotice({ kind: 'info', text: 'Undid a review from another deck.' })
+      } catch (e) {
+        if (isBridgeError(e, 'not_found')) {
+          setUndoable(false)
+          setNotice({ kind: 'info', text: 'Nothing to undo.' })
+        } else setNotice({ kind: 'error', text: errorMessage(e) })
       }
-    } catch (e) {
-      if (isBridgeError(e, 'not_found')) {
+    },
+    [deck.id],
+  )
+
+  const undo = useCallback(async () => {
+    if (phaseRef.current === 'recording' || phaseRef.current === 'grading') return
+    try {
+      const last = await api.getLastReview()
+      if (!last) {
         setUndoable(false)
         setNotice({ kind: 'info', text: 'Nothing to undo.' })
-      } else setNotice({ kind: 'error', text: errorMessage(e) })
+      } else if (last.deck_id !== deck.id) {
+        setConfirmUndo(last)
+      } else {
+        await performUndo(last)
+      }
+    } catch (e) {
+      setNotice({ kind: 'error', text: errorMessage(e) })
     }
-  }, [deck.id])
+  }, [deck.id, performUndo])
 
   // --- keyboard ---
   useEffect(() => {
@@ -312,7 +337,7 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
     }
     const hold = () => settings?.record_mode === 'hold'
     const down = (e: KeyboardEvent) => {
-      if (typing(e) || customOpen) return
+      if (typing(e) || customOpen || confirmUndo) return
       const p = phaseRef.current
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         if ((isMac && e.metaKey) || (!isMac && e.ctrlKey)) {
@@ -383,7 +408,7 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
     }
-  }, [settings, help, customOpen, startRecording, stopRecording, cancelRecording, dontKnow, next, replay, override, undo, redoReading])
+  }, [settings, help, customOpen, confirmUndo, startRecording, stopRecording, cancelRecording, dontKnow, next, replay, override, undo, redoReading])
 
   const holdMode = settings?.record_mode === 'hold'
   const twoStep = !!card?.meaning_step
@@ -541,6 +566,26 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
       )}
 
       {help && <ShortcutHelp onClose={() => setHelp(false)} />}
+      {confirmUndo && (
+        <ConfirmDialog
+          title="Undo a review in another deck?"
+          yesLabel="Yes, undo it"
+          onNo={() => setConfirmUndo(null)}
+          onYes={() => {
+            const last = confirmUndo
+            setConfirmUndo(null)
+            performUndo(last)
+          }}
+        >
+          <p>
+            Your most recent review is in <strong className="text-slate-800">“{confirmUndo.deck_name}”</strong>, not this deck:{' '}
+            <span className="jp text-base text-slate-800">{confirmUndo.front}</span>
+            {confirmUndo.reading && confirmUndo.reading !== confirmUndo.front && <span className="jp"> ({confirmUndo.reading})</span>}, reviewed{' '}
+            {new Date(confirmUndo.reviewed_at).toLocaleString()}.
+          </p>
+          <p>Undo always goes newest first. Undoing it resets that card in “{confirmUndo.deck_name}”; nothing in this deck changes.</p>
+        </ConfirmDialog>
+      )}
       {customOpen && (
         <CustomStudyDialog
           deck={deck}

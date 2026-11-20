@@ -223,8 +223,12 @@ class Api:
         return self._core.override_grade(_id(review_id, "review_id"), correct, step)
 
     @_envelope
-    def undo_last_review(self):
-        return self._core.undo_last_review()
+    def get_last_review(self):
+        return self._core.get_last_review()
+
+    @_envelope
+    def undo_last_review(self, review_id=None):
+        return self._core.undo_last_review(None if review_id is None else _id(review_id, "review_id"))
 
     # --- mic test ---
     @_envelope
