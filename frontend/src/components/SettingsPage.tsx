@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { api, errorMessage, type InputDevice, type Settings, type Status, type Theme } from '../api'
 import { applyTheme } from '../theme'
+import { getScale, SCALE_MAX, SCALE_MIN, setScale, subscribeScale } from '../zoom'
 import { MicTest } from './MicTest'
 import { Button, ErrorBanner, Field, PageHeader, Panel, inputCls } from './ui'
 
@@ -13,6 +14,7 @@ export function SettingsPage({ status, onBack, onOpenSetup }: { status: Status |
   const [port, setPort] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState<string | null>(null)
+  const scale = useSyncExternalStore(subscribeScale, getScale)
 
   useEffect(() => {
     api.getSettings().then((x) => {
@@ -53,6 +55,20 @@ export function SettingsPage({ status, onBack, onOpenSetup }: { status: Status |
             <option value="light">Light</option>
             <option value="system">Match system</option>
           </select>
+        </Field>
+        <Field label={`Interface size: ${Math.round(scale * 100)}%`} hint="Also Ctrl + scroll, or Ctrl + = / Ctrl + − anywhere. Ctrl + 0 resets to 100%.">
+          <div className="flex items-center gap-3">
+            <input
+              type="range"
+              className="flex-1 accent-indigo-600"
+              min={SCALE_MIN}
+              max={SCALE_MAX}
+              step={0.05}
+              value={scale}
+              onChange={(e) => setScale(Number(e.target.value))}
+            />
+            <Button variant="ghost" onClick={() => setScale(1)} disabled={scale === 1}>Reset</Button>
+          </div>
         </Field>
       </Panel>
 

@@ -12,6 +12,7 @@ const rows: [string, string][] = [
   ['3', 'Two-step cards: meaning wrong'],
   ['4', 'Two-step cards: meaning right'],
   [isMac ? '⌘ Z' : 'Ctrl Z', 'Undo last review'],
+  ['Ctrl scroll', 'Bigger / smaller interface (also Ctrl = / Ctrl −; Ctrl 0 resets)'],
   ['?', 'Show / hide this help'],
 ]
 

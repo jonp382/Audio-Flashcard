@@ -114,7 +114,7 @@ export function MicTest({ gain, onGainChange }: { gain: number; onGainChange: (g
           <div className="absolute top-0 h-full w-0.5 bg-slate-500" style={{ left: `${Math.round(peakHold * 100)}%` }} />
           <div className="absolute top-0 h-full border-l-2 border-dashed border-rose-400" style={{ left: `${Math.round(gate * 100)}%` }} title="Below this line counts as silence" />
         </div>
-        <div className="mt-1 flex justify-between text-[11px] text-slate-400">
+        <div className="mt-1 flex justify-between text-[0.6875rem] text-slate-400">
           <span>silence</span>
           <span>speak normally: aim for the middle, peaks well before the end</span>
           <span>max</span>

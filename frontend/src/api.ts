@@ -119,6 +119,7 @@ export interface Settings {
   mic_gain: number // linear, 1-16
   theme: Theme
   shuffle_due: boolean // due cards in random order (new cards keep their order)
+  ui_scale: number // interface scale, 1 = 100%
 }
 
 export type Theme = 'dark' | 'light' | 'system'

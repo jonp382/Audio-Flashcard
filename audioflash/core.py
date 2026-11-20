@@ -1123,6 +1123,10 @@ def validate_settings_patch(patch: Any) -> dict[str, Any]:
             if v not in ("dark", "light", "system"):
                 raise AppError("invalid_input", "theme must be 'dark', 'light' or 'system'")
             out[k] = v
+        elif k == "ui_scale":
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not config.UI_SCALE_MIN <= v <= config.UI_SCALE_MAX:
+                raise AppError("invalid_input", f"ui_scale must be {config.UI_SCALE_MIN}-{config.UI_SCALE_MAX}")
+            out[k] = round(float(v), 2)
         elif k == "shuffle_due":
             if not isinstance(v, bool):
                 raise AppError("invalid_input", "shuffle_due must be true or false")

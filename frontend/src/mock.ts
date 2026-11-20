@@ -22,7 +22,7 @@ export function createMockApi(): PyApi {
     { ...mk(1, '方', 'person (polite form)', 'かた'), sentence: '次の<b>方</b>、どうぞ。', sentence_meaning: 'The next person, please.' },
     mk(2, '山', 'mountain', 'やま'),
   ]
-  let settings: Settings = { ollama_host: 'localhost', ollama_port: 11434, llm_model: 'qwen3:8b', whisper_device: 'cpu', mic_device: null, record_mode: 'toggle', mic_gain: 1, theme: 'dark', shuffle_due: false }
+  let settings: Settings = { ollama_host: 'localhost', ollama_port: 11434, llm_model: 'qwen3:8b', whisper_device: 'cpu', mic_device: null, record_mode: 'toggle', mic_gain: 1, theme: 'dark', shuffle_due: false, ui_scale: 1 }
   let mic = false
   let recStart: number | null = null
   let recCard: number | null = null

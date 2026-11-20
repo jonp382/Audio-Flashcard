@@ -24,6 +24,14 @@ def test_theme_and_shuffle_defaults_and_validation(api):
     assert code(api.update_settings({"shuffle_due": 1})) == "invalid_input"
 
 
+def test_ui_scale_setting(api):
+    assert ok(api.get_settings())["ui_scale"] == 1.0
+    assert ok(api.update_settings({"ui_scale": 1.25}))["ui_scale"] == 1.25
+    assert ok(api.update_settings({"ui_scale": 1.2000001}))["ui_scale"] == 1.2
+    for bad in (0.1, 3, True, "1.5"):
+        assert code(api.update_settings({"ui_scale": bad})) == "invalid_input"
+
+
 # --- shuffle --------------------------------------------------------------------------
 
 

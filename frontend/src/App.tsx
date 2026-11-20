@@ -10,6 +10,7 @@ import { SetupWizard } from './components/SetupWizard'
 import { Spinner } from './components/ui'
 import { WeakSpots } from './components/WeakSpots'
 import { applyTheme } from './theme'
+import { applyScale, installZoomShortcuts } from './zoom'
 
 type View =
   | { name: 'decks' }
@@ -35,7 +36,11 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    api.getSettings().then((s) => applyTheme(s.theme), () => {})
+    installZoomShortcuts()
+    api.getSettings().then((s) => {
+      applyTheme(s.theme)
+      applyScale(s.ui_scale)
+    }, () => {})
   }, [])
 
   useEffect(() => {

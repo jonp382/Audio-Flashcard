@@ -26,6 +26,10 @@ RECORDINGS_PER_CARD = 10
 # Software mic boost (settings key mic_gain, linear). 1.0 = no boost; 16.0 = +24 dB.
 MIC_GAIN_MIN = 1.0
 MIC_GAIN_MAX = 16.0
+
+# Interface scale (ui_scale setting): 1.0 = 100%. Ctrl+scroll / Ctrl+= / Ctrl+- in the UI.
+UI_SCALE_MIN = 0.5
+UI_SCALE_MAX = 2.5
 MIC_TEST_MAX_SECONDS = 5.0
 # Before Whisper, quiet clips are peak-normalized to this level (boost only, capped),
 # so a quiet mic still gives Whisper / its VAD a healthy signal.
@@ -112,4 +116,5 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # Shuffle due cards (learning cards due now, reviews due the same day) so the order
     # isn't memorised. New cards always keep their file order. Toggled in the review header.
     "shuffle_due": False,
+    "ui_scale": 1.0,
 }
