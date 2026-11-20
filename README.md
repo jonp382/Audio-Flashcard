@@ -1,6 +1,10 @@
 # Audio Flashcard
 
+**This app is a work-in-progress for my personal language learning journey, and at this time has no published releases.**
+
 A flashcard app for studying Japanese where you answer out loud instead of typing.
+
+![image1](./images/example.png)
 
 You see a word, say how it's read, then say what it means. The app checks both and tells you which part you got wrong.
 
@@ -78,7 +82,7 @@ ollama pull qwen3:8b
 
 That's about 5 GB. Any other ollama model can be picked in Settings.
 
-Using it is strongly recommended. Without ollama the app can't check meanings, so you'd only be able to study cards that ask for a reading.
+Using it is strongly recommended. Without ollama the app can't check meanings, so you'd only be able to study cards that ask for a reading. With a 3070ti (8GB VRAM), takes ~3 seconds for ollama and `qwen:8b` to generate a response for the meaning.
 
 ### Using your GPU (optional)
 
