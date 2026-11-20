@@ -117,7 +117,11 @@ export interface Settings {
   mic_device: string | null
   record_mode: 'toggle' | 'hold'
   mic_gain: number // linear, 1-16
+  theme: Theme
+  shuffle_due: boolean // due cards in random order (new cards keep their order)
 }
+
+export type Theme = 'dark' | 'light' | 'system'
 
 export interface InputDevice {
   name: string
@@ -162,6 +166,7 @@ export interface HeardResult {
   step: 'reading'
   card_id: number
   transcript: string
+  skipped?: boolean // "I don't know": nothing recorded, the reading will score 0
 }
 
 export interface ReviewResult {
@@ -369,6 +374,9 @@ export const api = {
   cancelRecording: () => call<null>('cancel_recording'),
   stopRecording: () => call<ReviewResult | HeardResult>('stop_recording'),
   retryGrading: () => call<ReviewResult>('retry_grading'),
+  /** "I don't know" for the current answer (one-step card) or step (two-step card): scores 0. */
+  dontKnow: (cardId: number, step?: AnswerStep) =>
+    step ? call<ReviewResult | HeardResult>('dont_know', cardId, step) : call<ReviewResult | HeardResult>('dont_know', cardId),
   overrideGrade: (reviewId: number, correct: boolean, step?: AnswerStep) =>
     step ? call<ReviewResult>('override_grade', reviewId, correct, step) : call<ReviewResult>('override_grade', reviewId, correct),
   undoLastReview: () => call<{ card_id: number; deck_id: number }>('undo_last_review'),

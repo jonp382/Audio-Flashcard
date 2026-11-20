@@ -107,4 +107,9 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "mic_device": None,
     "record_mode": "toggle",
     "mic_gain": 1.0,
+    # UI colour theme: 'dark' | 'light' | 'system' (follow the OS preference).
+    "theme": "dark",
+    # Shuffle due cards (learning cards due now, reviews due the same day) so the order
+    # isn't memorised. New cards always keep their file order. Toggled in the review header.
+    "shuffle_due": False,
 }

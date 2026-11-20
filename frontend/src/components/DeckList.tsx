@@ -117,7 +117,7 @@ export function DeckList({
           <p className="text-sm">Create a deck, then add cards by hand or import a CSV / Anki text export.</p>
         </Panel>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-surface shadow-sm">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>

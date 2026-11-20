@@ -9,6 +9,7 @@ import { SettingsPage } from './components/SettingsPage'
 import { SetupWizard } from './components/SetupWizard'
 import { Spinner } from './components/ui'
 import { WeakSpots } from './components/WeakSpots'
+import { applyTheme } from './theme'
 
 type View =
   | { name: 'decks' }
@@ -31,6 +32,10 @@ export default function App() {
     } catch {
       /* bridge not ready yet */
     }
+  }, [])
+
+  useEffect(() => {
+    api.getSettings().then((s) => applyTheme(s.theme), () => {})
   }, [])
 
   useEffect(() => {
@@ -118,7 +123,7 @@ function Shell({ status, onNav, active, children }: { status: Status; onNav: (v:
   return (
     <div className="flex h-full flex-col">
       {!studying && (
-        <nav className="flex items-center gap-1 border-b border-slate-200 bg-white px-6 py-2.5">
+        <nav className="flex items-center gap-1 border-b border-slate-200 bg-surface px-6 py-2.5">
           <span className="mr-4 font-semibold text-indigo-700">Audio Flashcard</span>
           <NavBtn on={active === 'decks'} onClick={() => onNav({ name: 'decks' })}>Decks</NavBtn>
           <NavBtn on={active === 'settings'} onClick={() => onNav({ name: 'settings' })}>Settings</NavBtn>

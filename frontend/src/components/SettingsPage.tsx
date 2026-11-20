@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { api, errorMessage, type InputDevice, type Settings, type Status } from '../api'
+import { api, errorMessage, type InputDevice, type Settings, type Status, type Theme } from '../api'
+import { applyTheme } from '../theme'
 import { MicTest } from './MicTest'
 import { Button, ErrorBanner, Field, PageHeader, Panel, inputCls } from './ui'
 
@@ -25,7 +26,9 @@ export function SettingsPage({ status, onBack, onOpenSetup }: { status: Status |
   const patch = async (p: Partial<Settings>, label: string) => {
     setError(null)
     try {
-      setS(await api.updateSettings(p))
+      const next = await api.updateSettings(p)
+      setS(next)
+      applyTheme(next.theme)
       setSaved(label)
       setTimeout(() => setSaved(null), 1500)
     } catch (e) {
@@ -41,6 +44,17 @@ export function SettingsPage({ status, onBack, onOpenSetup }: { status: Status |
       <PageHeader title="Settings" onBack={onBack} />
       <ErrorBanner message={error} onClose={() => setError(null)} />
       {saved && <div className="text-sm text-emerald-700">Saved {saved}</div>}
+
+      <Panel className="space-y-4">
+        <h2 className="font-semibold">Appearance</h2>
+        <Field label="Theme" hint={s.theme === 'system' ? 'Follows the desktop’s light/dark preference, if the window is told about it.' : undefined}>
+          <select className={inputCls} value={s.theme} onChange={(e) => patch({ theme: e.target.value as Theme }, 'theme')}>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="system">Match system</option>
+          </select>
+        </Field>
+      </Panel>
 
       <Panel className="space-y-4">
         <h2 className="font-semibold">Recording</h2>

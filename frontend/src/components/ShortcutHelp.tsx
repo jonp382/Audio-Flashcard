@@ -3,6 +3,7 @@ import { isMac } from '../format'
 const rows: [string, string][] = [
   ['Space', 'Record (toggle mode: press to start/stop · hold mode: hold to record)'],
   ['Esc', 'Cancel the current recording'],
+  ['D', "I don't know (scores 0; two-step cards: just the current step)"],
   ['Enter', 'Next card (on the result screen)'],
   ['R', 'Replay your last recording'],
   ['Backspace', 'Re-record the reading (two-step cards, before the meaning)'],
@@ -16,8 +17,8 @@ const rows: [string, string][] = [
 
 export function ShortcutHelp({ onClose }: { onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40" onClick={onClose}>
-      <div className="w-[28rem] rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="w-[28rem] rounded-xl bg-surface p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <h2 className="mb-4 text-lg font-semibold">Keyboard shortcuts</h2>
         <table className="w-full text-sm">
           <tbody>

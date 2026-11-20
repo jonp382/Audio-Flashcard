@@ -145,7 +145,7 @@ function Segmented<T extends string | number>({
   onChange: (v: T) => void
 }) {
   return (
-    <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+    <div className="inline-flex rounded-lg border border-slate-200 bg-surface p-0.5">
       {options.map((o) => (
         <button
           key={String(o.value)}

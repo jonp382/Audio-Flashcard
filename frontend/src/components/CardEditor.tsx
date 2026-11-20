@@ -121,7 +121,7 @@ export function CardEditor({ deckId, onBack }: { deckId: number; onBack: () => v
       <div className="grid grid-cols-5 gap-5">
         <div className="col-span-3 space-y-3">
           <input className={inputCls} placeholder="Search cards…" value={filter} onChange={(e) => setFilter(e.target.value)} />
-          <div className="max-h-[calc(100vh-14rem)] overflow-auto rounded-xl border border-slate-200 bg-white">
+          <div className="max-h-[calc(100vh-14rem)] overflow-auto rounded-xl border border-slate-200 bg-surface">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>

@@ -213,6 +213,10 @@ class Api:
         return self._core.retry_grading()
 
     @_envelope
+    def dont_know(self, card_id, step=None):
+        return self._core.dont_know(_id(card_id, "card_id"), step)
+
+    @_envelope
     def override_grade(self, review_id, correct, step=None):
         if not isinstance(correct, bool):
             raise AppError("invalid_input", "correct must be true or false")

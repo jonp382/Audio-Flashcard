@@ -13,6 +13,7 @@ both stored per deck per local day in ``study_extensions``:
 
 from __future__ import annotations
 
+import random
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Any
@@ -151,42 +152,73 @@ def custom_study_options(conn: sqlite3.Connection, deck: sqlite3.Row, now: datet
     }
 
 
-def next_card(conn: sqlite3.Connection, deck: sqlite3.Row, now: datetime) -> dict[str, Any]:
+def _last_answered(conn: sqlite3.Connection, deck_id: int) -> int | None:
+    row = conn.execute(
+        "SELECT card_id FROM reviews WHERE deck_id = ? ORDER BY reviewed_at DESC, id DESC LIMIT 1", (deck_id,)
+    ).fetchone()
+    return row["card_id"] if row else None
+
+
+def _pick_random(rows: list[sqlite3.Row], avoid: int | None, rng: random.Random) -> sqlite3.Row | None:
+    """Random card from `rows`, never the card just answered unless it is the only one."""
+    if not rows:
+        return None
+    others = [r for r in rows if r["id"] != avoid]
+    return rng.choice(others or rows)
+
+
+def next_card(
+    conn: sqlite3.Connection,
+    deck: sqlite3.Row,
+    now: datetime,
+    shuffle: bool = False,
+    rng: random.Random | None = None,
+) -> dict[str, Any]:
+    """`shuffle`: due learning cards come in random order (never the card just answered
+    twice in a row, unless it is the only one), reviews in random order within the
+    oldest due date, and practice-pass cards in random order. New cards always keep their file order. Without shuffle, everything
+    is in due order (§7)."""
     deck_id = deck["id"]
     now_iso = to_iso(now)
     new_left, rev_left = _remaining(deck, conn, now)
+    rng = rng or random.Random()
+    avoid = _last_answered(conn, deck_id) if shuffle else None
 
     def first(sql: str, params: tuple) -> sqlite3.Row | None:
         return conn.execute(sql, params).fetchone()
 
-    card = first(
-        "SELECT * FROM cards WHERE deck_id = ? AND state IN ('learning','relearning') AND due_at <= ? "
-        "ORDER BY due_at, id LIMIT 1",
-        (deck_id, now_iso),
-    )
+    def learning_due_by(until: str) -> sqlite3.Row | None:
+        sql = "SELECT * FROM cards WHERE deck_id = ? AND state IN ('learning','relearning') AND due_at <= ? "
+        if shuffle:
+            return _pick_random(conn.execute(sql, (deck_id, until)).fetchall(), avoid, rng)
+        return first(sql + "ORDER BY due_at, id LIMIT 1", (deck_id, until))
+
+    card = learning_due_by(now_iso)
     if card is None and rev_left > 0:
         card = first(
             "SELECT * FROM cards WHERE deck_id = ? AND state = 'review' AND due_date <= ? "
             "ORDER BY due_date, id LIMIT 1",
             (deck_id, _today(now)),
         )
+        if card is not None and shuffle:
+            same_day = conn.execute(
+                "SELECT * FROM cards WHERE deck_id = ? AND state = 'review' AND due_date = ?",
+                (deck_id, card["due_date"]),
+            ).fetchall()
+            card = _pick_random(same_day, avoid, rng)
     if card is None and new_left > 0:
         card = first(
             "SELECT * FROM cards WHERE deck_id = ? AND state = 'new' ORDER BY created_at, id LIMIT 1",
             (deck_id,),
         )
     if card is None:
-        ahead = to_iso(now + timedelta(minutes=config.LEARN_AHEAD_MINUTES))
-        card = first(
-            "SELECT * FROM cards WHERE deck_id = ? AND state IN ('learning','relearning') AND due_at <= ? "
-            "ORDER BY due_at, id LIMIT 1",
-            (deck_id, ahead),
-        )
+        card = learning_due_by(to_iso(now + timedelta(minutes=config.LEARN_AHEAD_MINUTES)))
     practice = False
     if card is None:
         cands = practice_candidates(conn, deck_id, now)
         if cands:
-            card, practice = cands[0], True
+            card = _pick_random(cands, avoid, rng) if shuffle else cands[0]
+            practice = True
 
     next_due = None
     if card is None:

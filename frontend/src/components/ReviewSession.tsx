@@ -200,6 +200,39 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
     setPhase('question')
   }, [])
 
+  /** "I don't know": the current answer (two-step card: the current step) scores 0. A
+   *  skipped reading moves on to the meaning, like a recorded one (heard = ''). */
+  const dontKnow = useCallback(async () => {
+    const c = cardRef.current
+    if (!c || pending.current || phaseRef.current !== 'question') return
+    pending.current = true
+    setNotice(null)
+    try {
+      const r = await api.dontKnow(c.id, c.meaning_step ? stepRef.current : undefined)
+      if ('stage' in r) {
+        setHeard('')
+        setStep('meaning')
+        return
+      }
+      setResult(r)
+      setUndoable(true)
+      setPhase('result')
+    } catch (e) {
+      setNotice({ kind: 'error', text: errorMessage(e) })
+    } finally {
+      pending.current = false
+    }
+  }, [])
+
+  const toggleShuffle = useCallback(async () => {
+    if (!settings) return
+    try {
+      setSettings(await api.updateSettings({ shuffle_due: !settings.shuffle_due }))
+    } catch (e) {
+      setNotice({ kind: 'error', text: errorMessage(e) })
+    }
+  }, [settings])
+
   const retry = useCallback(async () => {
     setPhase('grading')
     setNotice(null)
@@ -301,6 +334,10 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
           if (help) setHelp(false)
           else cancelRecording()
           return
+        case 'd':
+        case 'D':
+          if (p === 'question') dontKnow()
+          return
         case 'Enter':
           if (p === 'result') {
             e.preventDefault()
@@ -346,7 +383,7 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
     }
-  }, [settings, help, customOpen, startRecording, stopRecording, cancelRecording, next, replay, override, undo, redoReading])
+  }, [settings, help, customOpen, startRecording, stopRecording, cancelRecording, dontKnow, next, replay, override, undo, redoReading])
 
   const holdMode = settings?.record_mode === 'hold'
   const twoStep = !!card?.meaning_step
@@ -360,6 +397,20 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
         <h1 className="flex-1 truncate text-lg font-semibold text-slate-900">{deck.name}</h1>
         <MicLive open={!!rec?.mic_open} />
         <CountBadges counts={counts} size="lg" />
+        <Button
+          variant="ghost"
+          onClick={toggleShuffle}
+          disabled={!settings}
+          aria-pressed={!!settings?.shuffle_due}
+          className={settings?.shuffle_due ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100' : ''}
+          title={
+            settings?.shuffle_due
+              ? 'Shuffle is on: due cards come in random order (new cards keep their order). Click to turn off.'
+              : 'Shuffle is off: due cards come in due order. Click to shuffle them.'
+          }
+        >
+          ⇄ Shuffle
+        </Button>
         <Button variant="ghost" onClick={undo} disabled={!undoable || phase === 'recording' || phase === 'grading'} title={`Undo last review (${isMac ? '⌘' : 'Ctrl'}+Z)`}>
           ↶ Undo
         </Button>
@@ -407,7 +458,7 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
       {card && phase !== 'done' && phase !== 'loading' && (
         <div className="flex flex-1 flex-col">
           {/* prompt */}
-          <div className="rounded-2xl border border-slate-200 bg-white px-8 py-12 text-center shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-surface px-8 py-12 text-center shadow-sm">
             <div className="mb-2 text-xs uppercase tracking-widest text-slate-400">
               {card.practice ? <span className="text-violet-600">Practice</span> : card.state === 'new' ? 'New' : card.state === 'review' ? 'Review' : 'Learning'} ·{' '}
               {!twoStep
@@ -428,8 +479,14 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
             {phase === 'result' && card.notes && <div className="mx-auto mt-3 max-w-xl text-sm italic text-slate-500">{card.notes}</div>}
             {askMeaning && phase !== 'result' && heard !== null && (
               <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-slate-600">
-                <span className="text-sm text-slate-400">Reading heard:</span>
-                <span className="jp text-2xl text-slate-800">{heard}</span>
+                {heard === '' ? (
+                  <span className="text-sm text-slate-400">Reading: skipped (I don't know)</span>
+                ) : (
+                  <>
+                    <span className="text-sm text-slate-400">Reading heard:</span>
+                    <span className="jp text-2xl text-slate-800">{heard}</span>
+                  </>
+                )}
                 <Button variant="ghost" onClick={redoReading} disabled={phase !== 'question'} title="Re-record the reading (Backspace)">
                   ↺ Re-record
                 </Button>
@@ -459,6 +516,12 @@ export function ReviewSession({ deck, onExit, onOpenSetup }: { deck: Deck; onExi
                   <span className="flex items-center gap-2"><Spinner /> {twoStep && step === 'reading' ? 'Listening back…' : 'Grading…'}</span>
                 )}
               </div>
+              {phase === 'question' && (
+                <Button variant="ghost" onClick={dontKnow} title="Counts as 0/3 (D)">
+                  {!twoStep ? "I don't know" : askMeaning ? "I don't know the meaning" : "I don't know the reading"}
+                  <kbd className="rounded border border-slate-300 px-1.5 font-mono text-xs text-slate-400">D</kbd>
+                </Button>
+              )}
               {phase === 'retry' && (
                 <div className="flex gap-2">
                   <Button variant="primary" onClick={retry}>Retry grading</Button>
@@ -572,18 +635,18 @@ function ResultView({
     <div className="mt-6 space-y-4">
       <div className="flex items-center gap-3">
         <span className={`rounded-full px-3 py-1 text-sm font-semibold ${colors[result.score]}`}>
-          {SCORE_LABEL[result.score]} · {result.score}/3
+          {scoreLabel(result.score, result.transcript)} · {result.score}/3
         </span>
         {result.overridden && <span className="text-xs text-slate-500">overridden (auto: {result.score_original})</span>}
         <span className="flex-1 text-slate-700">{result.feedback}</span>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
+        <div className="rounded-xl border border-slate-200 bg-surface p-4">
           <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">You said</div>
-          <div className={`${language === 'ja' ? 'jp text-2xl' : 'text-xl'} break-words`}>{result.transcript}</div>
+          <Said text={result.transcript} className={`${language === 'ja' ? 'jp text-2xl' : 'text-xl'} break-words`} />
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
+        <div className="rounded-xl border border-slate-200 bg-surface p-4">
           <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">Expected</div>
           {language === 'ja' && result.expected.reading ? (
             <>
@@ -627,6 +690,14 @@ function ResultView({
   )
 }
 
+const scoreLabel = (score: number, transcript: string) => (!transcript && score === 0 ? "Didn't know" : SCORE_LABEL[score])
+
+/** What was said; an empty transcript means "I don't know" (a real answer is never empty). */
+function Said({ text, className }: { text: string; className: string }) {
+  if (!text) return <div className="text-base italic text-slate-400">I didn't know</div>
+  return <div className={className}>{text}</div>
+}
+
 const SCORE_COLORS = ['bg-rose-100 text-rose-800', 'bg-rose-100 text-rose-800', 'bg-amber-100 text-amber-800', 'bg-emerald-100 text-emerald-800']
 
 /** Result for a two-step card: one row per step (each with its own right/wrong buttons),
@@ -655,11 +726,11 @@ function StepsResultView({
         const right = s.score >= 2
         const [kWrong, kRight] = keys[s.step]
         return (
-          <div key={s.step} className="rounded-xl border border-slate-200 bg-white p-4">
+          <div key={s.step} className="rounded-xl border border-slate-200 bg-surface p-4">
             <div className="mb-3 flex flex-wrap items-center gap-3">
               <span className="w-20 text-xs font-semibold uppercase tracking-wide text-slate-400">{s.step}</span>
               <span className={`rounded-full px-3 py-1 text-sm font-semibold ${SCORE_COLORS[s.score]}`}>
-                {SCORE_LABEL[s.score]} · {s.score}/3
+                {scoreLabel(s.score, s.transcript)} · {s.score}/3
               </span>
               {s.overridden && <span className="text-xs text-slate-500">overridden (auto: {s.score_original})</span>}
               <span className="flex-1" />
@@ -673,7 +744,7 @@ function StepsResultView({
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">You said</div>
-                <div className={`${ja ? 'jp text-2xl' : 'text-xl'} break-words`}>{s.transcript}</div>
+                <Said text={s.transcript} className={`${ja ? 'jp text-2xl' : 'text-xl'} break-words`} />
               </div>
               <div>
                 <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">Expected</div>

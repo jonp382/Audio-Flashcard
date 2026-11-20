@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 import sqlite3
 import threading
@@ -44,6 +45,7 @@ class HeardReading:
     card_id: int
     samples: np.ndarray
     transcript: str
+    skipped: bool = False  # "I don't know": scored 0, no audio, empty transcript
 
 
 @dataclass
@@ -55,6 +57,7 @@ class HeldAnswer:
     samples: np.ndarray
     transcript: str
     reading: HeardReading | None = None
+    skipped: bool = False
 
 
 STEPS = ("reading", "meaning")
@@ -62,6 +65,8 @@ _QUESTION_MARKS = re.compile(r"[?？]")
 DUPLICATE_CARD = "This deck already has a card with the same front, reading and back"
 # Silence between the reading and meaning clips in the saved recording.
 STEP_GAP_S = 0.4
+# "I don't know": the answer (or one step of a two-step card) scores 0 ("again").
+DONT_KNOW_GRADE = reviews.Grade(score=0, feedback="You didn't know this one.")
 
 
 class Core:
@@ -86,6 +91,7 @@ class Core:
         self.downloader = downloader or ModelDownloader(paths.models, on_done=self._after_download)
         self.encoder = encoder
         self.open_browser = open_browser
+        self.rng = random.Random()  # queue shuffle; tests replace it with a seeded one
         self.file_dialog: Callable[[], str | None] | None = None  # set by __main__ once the window exists
         # Deck files (.afdeck): native open / save dialogs, also set by __main__. The save
         # dialog gets a suggested file name. Paths only ever come from these dialogs.
@@ -418,12 +424,16 @@ class Core:
             deck = self._deck_or_404(conn, deck_id)
             with database.transaction(conn):
                 scheduler.extend(conn, deck_id, now, extra_new, review_studied)
-            return scheduler.next_card(conn, deck, now)
+            return self._next(conn, deck, now)
 
     def get_next_card(self, deck_id: int) -> dict:
         with self.db() as conn:
             deck = self._deck_or_404(conn, deck_id)
-            return scheduler.next_card(conn, deck, self.clock())
+            return self._next(conn, deck, self.clock())
+
+    def _next(self, conn: sqlite3.Connection, deck: sqlite3.Row, now: datetime) -> dict:
+        shuffle = bool(database.get_settings(conn)["shuffle_due"])
+        return scheduler.next_card(conn, deck, now, shuffle=shuffle, rng=self.rng)
 
     # --- import -----------------------------------------------------------------------
 
@@ -672,7 +682,33 @@ class Core:
                 held = self._held
             if held is None:
                 raise AppError("not_found", "No answer to retry")
-            return self._grade_persist(held.card_id, held.samples, held.transcript, held.reading)
+            return self._grade_persist(held.card_id, held.samples, held.transcript, held.reading, held.skipped)
+
+    def dont_know(self, card_id: int, step: str | None = None) -> dict:
+        """"I don't know" for the current answer: it scores 0 with nothing recorded.
+        One-step card: graded and saved like a normal answer. Two-step card, reading step
+        (default): returns the same `{"stage": "heard", ...}` shape as a recorded reading
+        (with `skipped`), and the meaning is asked next; the reading is graded 0 with the
+        meaning. Meaning step: graded right away (reading by reading match, meaning 0), so
+        no LLM call is needed."""
+        if step is not None and step not in STEPS:
+            raise AppError("invalid_input", "step must be 'reading' or 'meaning'")
+        with self.review_lock():
+            if self.mic.recording:
+                raise AppError("busy", "Already recording")
+            card, language = self._card_context(card_id)
+            two_step = database.has_meaning_step(language, card["back"], card["reading"])
+            step = (step or "reading") if two_step else None
+            empty = np.zeros(0, dtype=np.float32)
+            with self._state_lock:
+                self._held = None
+                if step == "reading":
+                    self._heard = HeardReading(card_id, empty, "", skipped=True)
+                    return {"stage": "heard", "step": "reading", "card_id": card_id, "transcript": "", "skipped": True}
+                heard = self._heard
+            if step == "meaning" and (heard is None or heard.card_id != card_id):
+                raise AppError("invalid_input", "Record the reading first")
+            return self._grade_persist(card_id, empty, "", heard if step == "meaning" else None, skipped=True)
 
     def _card_context(self, card_id: int) -> tuple[sqlite3.Row, str]:
         with self.db() as conn:
@@ -703,8 +739,15 @@ class Core:
         return text
 
     def _grade_persist(
-        self, card_id: int, samples: np.ndarray, transcript: str, reading: HeardReading | None = None
+        self,
+        card_id: int,
+        samples: np.ndarray,
+        transcript: str,
+        reading: HeardReading | None = None,
+        skipped: bool = False,
     ) -> dict:
+        """`skipped`: the answer being graded (one-step answer, or the meaning step) was
+        "I don't know"; it scores 0 without calling a grader."""
         card, language = self._card_context(card_id)
         alts = json.loads(card["alt_answers"]) if card["alt_answers"] else []
         # Reading match accepts a transcript that is exactly the front (今日 guard). When
@@ -713,7 +756,9 @@ class Core:
         ja_front = "" if self._front_is_ambiguous(card) else card["front"]
         steps: list[reviews.StepResult] | None = None
         try:
-            if reading is None:
+            if reading is None and skipped:
+                grade = DONT_KNOW_GRADE
+            elif reading is None:
                 front = ja_front if language == "ja" else card["front"]
                 grade = grade_answer(
                     language,
@@ -727,31 +772,39 @@ class Core:
                 )
             else:
                 # Two-step card: reading by the deterministic match, meaning by the LLM.
-                rg = grade_answer("ja", reading.transcript, ja_front, card["back"], card["reading"], alts, self.ollama)
-                mg = grade_meaning(
-                    transcript,
-                    card["front"],
-                    card["back"],
-                    card["reading"],
-                    self.ollama,
-                    CardContext.from_card(card),
-                )
+                if reading.skipped:
+                    rg = DONT_KNOW_GRADE
+                else:
+                    rg = grade_answer("ja", reading.transcript, ja_front, card["back"], card["reading"], alts, self.ollama)
+                if skipped:
+                    mg = DONT_KNOW_GRADE
+                else:
+                    mg = grade_meaning(
+                        transcript,
+                        card["front"],
+                        card["back"],
+                        card["reading"],
+                        self.ollama,
+                        CardContext.from_card(card),
+                    )
                 steps = [
                     reviews.StepResult("reading", reading.transcript, rg),
                     reviews.StepResult("meaning", transcript, mg),
                 ]
         except LLMUnavailable as e:
-            self._hold(card_id, samples, transcript, reading)
+            self._hold(card_id, samples, transcript, reading, skipped)
             raise AppError("llm_unavailable", "Could not reach ollama. Start it and press retry.") from e
         except GradingFailed as e:
-            self._hold(card_id, samples, transcript, reading)
+            self._hold(card_id, samples, transcript, reading, skipped)
             raise AppError("grading_failed", "The grader returned an unusable answer. Press retry.") from e
         full_transcript = transcript
         audio_out = samples
         if steps is not None and reading is not None:
             full_transcript, grade = reviews.combine_steps(steps)
+            clips = [c.astype(np.float32) for c in (reading.samples, samples) if c.size]
             gap = np.zeros(int(STEP_GAP_S * config.SAMPLE_RATE), dtype=np.float32)
-            audio_out = np.concatenate([reading.samples.astype(np.float32), gap, samples.astype(np.float32)])
+            # A skipped step has no audio; then the saved recording is just the other clip.
+            audio_out = np.concatenate([clips[0], gap, clips[1]]) if len(clips) == 2 else (clips[0] if clips else samples)
         try:
             ogg = self.encoder(audio_out) if audio_out.size else None
         except Exception:
@@ -777,9 +830,16 @@ class Core:
             ).fetchone()
         return row is not None
 
-    def _hold(self, card_id: int, samples: np.ndarray, transcript: str, reading: HeardReading | None = None) -> None:
+    def _hold(
+        self,
+        card_id: int,
+        samples: np.ndarray,
+        transcript: str,
+        reading: HeardReading | None = None,
+        skipped: bool = False,
+    ) -> None:
         with self._state_lock:
-            self._held = HeldAnswer(card_id, samples, transcript, reading)
+            self._held = HeldAnswer(card_id, samples, transcript, reading, skipped)
 
     def override_grade(self, review_id: int, correct: bool, step: str | None = None) -> dict:
         if step is not None and step not in STEPS:
@@ -1058,5 +1118,13 @@ def validate_settings_patch(patch: Any) -> dict[str, Any]:
         elif k == "record_mode":
             if v not in ("toggle", "hold"):
                 raise AppError("invalid_input", "record_mode must be 'toggle' or 'hold'")
+            out[k] = v
+        elif k == "theme":
+            if v not in ("dark", "light", "system"):
+                raise AppError("invalid_input", "theme must be 'dark', 'light' or 'system'")
+            out[k] = v
+        elif k == "shuffle_due":
+            if not isinstance(v, bool):
+                raise AppError("invalid_input", "shuffle_due must be true or false")
             out[k] = v
     return out

@@ -240,7 +240,7 @@ function PlanReview({
           </p>
           <details className="mt-2 text-sm">
             <summary className="cursor-pointer text-amber-800">Show {n === 1 ? 'it' : 'them'}</summary>
-            <pre className="jp mt-2 max-h-56 overflow-auto whitespace-pre-wrap rounded bg-white p-2 text-xs text-slate-700">
+            <pre className="jp mt-2 max-h-56 overflow-auto whitespace-pre-wrap rounded bg-surface p-2 text-xs text-slate-700">
               {plan.missing.map((m) => `${m.front}${m.reading ? ` (${m.reading})` : ''} — ${m.back}`).join('\n')}
             </pre>
           </details>

@@ -46,8 +46,8 @@ export function CustomStudyDialog({ deck, onStarted, onClose }: { deck: Deck; on
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40" onClick={onClose}>
-      <div className="w-[30rem] space-y-4 rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="w-[30rem] space-y-4 rounded-xl bg-surface p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div>
           <h2 className="text-lg font-semibold">Continue studying</h2>
           <p className="text-sm text-slate-500">{deck.name}: everything you study here counts toward this deck's normal progress.</p>

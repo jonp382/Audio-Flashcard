@@ -22,7 +22,7 @@ export function createMockApi(): PyApi {
     { ...mk(1, '方', 'person (polite form)', 'かた'), sentence: '次の<b>方</b>、どうぞ。', sentence_meaning: 'The next person, please.' },
     mk(2, '山', 'mountain', 'やま'),
   ]
-  let settings: Settings = { ollama_host: 'localhost', ollama_port: 11434, llm_model: 'qwen3:8b', whisper_device: 'cpu', mic_device: null, record_mode: 'toggle', mic_gain: 1 }
+  let settings: Settings = { ollama_host: 'localhost', ollama_port: 11434, llm_model: 'qwen3:8b', whisper_device: 'cpu', mic_device: null, record_mode: 'toggle', mic_gain: 1, theme: 'dark', shuffle_due: false }
   let mic = false
   let recStart: number | null = null
   let recCard: number | null = null
@@ -102,6 +102,24 @@ export function createMockApi(): PyApi {
       }, 900)
     }),
     retry_grading: () => fail('not_found', 'No answer to retry'),
+    dont_know: (cardId: number, step?: string) => {
+      const card = cards.find((c) => c.id === cardId)!
+      if (card.meaning_step && step !== 'meaning') {
+        heardReading = ''
+        return ok({ stage: 'heard', step: 'reading', card_id: card.id, transcript: '', skipped: true })
+      }
+      done.add(card.id)
+      const skip = { score: 0 as const, score_original: null, overridden: false, feedback: "You didn't know this one.", transcript: '' }
+      const r: ReviewResult = { review_id: ++reviewId, card_id: card.id, deck_id: card.deck_id, ...skip, is_correct: false, expected: { front: card.front, back: card.back, reading: card.reading, alt_answers: card.alt_answers }, state: 'learning', next_due: new Date(Date.now() + 60_000).toISOString(), interval_days: 0, ease_factor: 2.5, recording_id: null, practice: false, steps: null }
+      if (card.meaning_step) {
+        const rs = heardReading === card.reading ? 3 : 0
+        r.steps = [
+          { step: 'reading', score: rs, score_original: null, overridden: false, transcript: heardReading ?? '', feedback: rs ? 'Correct' : "You didn't know this one." },
+          { step: 'meaning', ...skip },
+        ]
+      }
+      return ok(r)
+    },
     override_grade: (id: number, correct: boolean) => ok({ review_id: id, score: correct ? 3 : 1, is_correct: correct, overridden: true, score_original: 2 }),
     undo_last_review: () => { const last = [...done].pop(); if (last === undefined) return fail('not_found', 'Nothing to undo'); done.delete(last); return ok({ card_id: last, deck_id: cards.find((c) => c.id === last)!.deck_id }) },
     list_reviews: () => ok([]),
