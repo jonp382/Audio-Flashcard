@@ -70,7 +70,22 @@ cd frontend && npm ci && npm run build && cd ..
 
 The `--system-site-packages` flag matters: the windowing library (PyGObject) can't be installed with pip, so the virtual environment needs to see the copy apt installed.
 
-The first time you start the app it downloads the speech model (about 480 MB).
+The first time you start the app it downloads the speech model (Whisper "small", about 480 MB).
+
+### Choosing a speech model
+
+**Settings → Speech model** switches between Whisper models. The app downloads the one you pick and keeps using your current model until the download finishes.
+
+| Model | Download | Notes |
+|---|---|---|
+| small (default) | ~480 MB | Fast on CPU, weakest Japanese |
+| medium | ~1.5 GB | Better Japanese, 2–3x slower on CPU |
+| large-v3-turbo | ~1.6 GB | Close to large-v3 for Japanese. Use it on the GPU (~1.2 GB VRAM); on CPU it takes several seconds per answer |
+| large-v3 | ~3.1 GB | Most accurate, slowest |
+
+On a 3070 Ti, large-v3-turbo on the GPU transcribes a short sentence in about 0.2 seconds and fits next to `qwen3:8b`, though with not much VRAM to spare.
+
+Any other faster-whisper (CTranslate2) model works too: put its folder in `~/.local/share/AudioFlashcard/models/` and it shows up in the list under its folder name.
 
 ### Setting up ollama
 

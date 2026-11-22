@@ -65,8 +65,12 @@ class Api:
         return self._core.get_status()
 
     @_envelope
-    def download_whisper_model(self):
-        return self._core.download_whisper_model()
+    def download_whisper_model(self, model_id=None):
+        return self._core.download_whisper_model(model_id)
+
+    @_envelope
+    def list_whisper_models(self):
+        return self._core.list_whisper_models()
 
     @_envelope
     def get_download_status(self):

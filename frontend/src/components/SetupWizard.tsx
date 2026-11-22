@@ -87,10 +87,12 @@ export function SetupWizard({
             <div>
               <h2 className="font-semibold">Speech recognition model</h2>
               <p className="text-sm text-slate-600">
-                Whisper "small" (about 480 MB). This one-time download is the only time the app uses the internet.
+                {status.whisper_model_downloadable
+                  ? <>Whisper "{status.whisper_model}" (about {formatBytes(status.whisper_model_bytes)}). This one-time download is the only time the app uses the internet. You can switch models later in Settings.</>
+                  : <>The model folder <code>models/{status.whisper_model}</code> is missing. Put it back, or pick another model in Settings.</>}
               </p>
             </div>
-            {status.whisper_state === 'missing' && !whisperBusy && (
+            {status.whisper_state === 'missing' && !whisperBusy && status.whisper_model_downloadable && (
               <Button variant="primary" onClick={startDownload}>Download speech model</Button>
             )}
             {whisperBusy && (

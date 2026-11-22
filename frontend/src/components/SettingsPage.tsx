@@ -1,8 +1,9 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { api, errorMessage, type InputDevice, type Settings, type Status, type Theme } from '../api'
 import { applyTheme } from '../theme'
 import { getScale, SCALE_MAX, SCALE_MIN, setScale, subscribeScale } from '../zoom'
 import { MicTest } from './MicTest'
+import { WhisperModelPicker } from './WhisperModelPicker'
 import { Button, ErrorBanner, Field, PageHeader, Panel, inputCls } from './ui'
 
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '::1']
@@ -37,6 +38,17 @@ export function SettingsPage({ status, onBack, onOpenSetup }: { status: Status |
       setError(errorMessage(e))
     }
   }
+
+  const switchWhisperModel = useCallback(async (id: string) => {
+    setError(null)
+    try {
+      setS(await api.updateSettings({ whisper_model: id }))
+      setSaved('speech model (loading it)')
+      setTimeout(() => setSaved(null), 1500)
+    } catch (e) {
+      setError(errorMessage(e))
+    }
+  }, [])
 
   if (!s) return <ErrorBanner message={error} />
   const nonLocal = !LOCAL_HOSTS.includes(host.trim().toLowerCase())
@@ -107,9 +119,10 @@ export function SettingsPage({ status, onBack, onOpenSetup }: { status: Status |
 
       <Panel className="space-y-4">
         <h2 className="font-semibold">Speech recognition</h2>
+        <WhisperModelPicker current={s.whisper_model} onSwitch={switchWhisperModel} />
         <Field
           label="Run Whisper on"
-          hint="CPU is the default and keeps all GPU memory free for the LLM. GPU needs CUDA 12 cuBLAS/cuDNN libraries; if they're missing the app falls back to CPU."
+          hint="CPU keeps all GPU memory free for the LLM, but the large models are slow on it (several seconds per answer). GPU is much faster and needs CUDA 12 cuBLAS/cuDNN libraries; if they're missing the app falls back to CPU."
         >
           <select className={inputCls} value={s.whisper_device} onChange={(e) => patch({ whisper_device: e.target.value as 'cpu' | 'cuda' }, 'Whisper device (reloading model)')}>
             <option value="cpu">CPU</option>
@@ -118,7 +131,7 @@ export function SettingsPage({ status, onBack, onOpenSetup }: { status: Status |
         </Field>
         {status && (
           <p className="text-xs text-slate-500">
-            Model: {status.whisper_state}{status.whisper_state === 'ready' ? ` on ${status.whisper_device.toUpperCase()}` : ''}
+            {status.whisper_model}: {status.whisper_state}{status.whisper_state === 'ready' ? ` on ${status.whisper_device.toUpperCase()}` : ''}
           </p>
         )}
       </Panel>

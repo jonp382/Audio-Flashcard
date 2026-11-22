@@ -5,14 +5,14 @@ from audioflash import audio, config
 from audioflash.audio import Busy, MicError, RingBuffer, decode_audio, encode_ogg_opus
 from audioflash.stt import NoSpeech, WhisperNotReady, WhisperService, is_blocklisted
 
-from .conftest import FakeSegment, install_fake_model_files, tone
+from .conftest import FakeSegment, install_fake_model_files, small_dir, tone
 
 # --- STT ------------------------------------------------------------------------------
 
 
 def test_missing_model_reports_missing(paths):
     calls = []
-    w = WhisperService(paths.whisper_model, factory=lambda *a: calls.append(a))
+    w = WhisperService(small_dir(paths), factory=lambda *a: calls.append(a))
     w.load("cpu")
     assert w.snapshot()["state"] == "missing" and calls == []
     with pytest.raises(WhisperNotReady):
@@ -20,22 +20,22 @@ def test_missing_model_reports_missing(paths):
 
 
 def test_loads_local_path_only(paths, fake_model):
-    install_fake_model_files(paths.whisper_model)
+    install_fake_model_files(small_dir(paths))
     seen = []
-    w = WhisperService(paths.whisper_model, factory=lambda p, d, ct: seen.append((p, d, ct)) or fake_model)
+    w = WhisperService(small_dir(paths), factory=lambda p, d, ct: seen.append((p, d, ct)) or fake_model)
     w.load("cpu")
-    assert seen == [(str(paths.whisper_model), "cpu", "int8")]
+    assert seen == [(str(small_dir(paths)), "cpu", "int8")]
 
 
 def test_cuda_failure_falls_back_to_cpu(paths, fake_model):
-    install_fake_model_files(paths.whisper_model)
+    install_fake_model_files(small_dir(paths))
 
     def factory(p, device, ct):
         if device == "cuda":
             raise RuntimeError("libcublas.so.12 not found")
         return fake_model
 
-    w = WhisperService(paths.whisper_model, factory=factory)
+    w = WhisperService(small_dir(paths), factory=factory)
     w.load("cuda")
     assert w.snapshot() == {"state": "ready", "device": "cpu", "error": None}
 

@@ -22,7 +22,7 @@ export function createMockApi(): PyApi {
     { ...mk(1, '方', 'person (polite form)', 'かた'), sentence: '次の<b>方</b>、どうぞ。', sentence_meaning: 'The next person, please.' },
     mk(2, '山', 'mountain', 'やま'),
   ]
-  let settings: Settings = { ollama_host: 'localhost', ollama_port: 11434, llm_model: 'qwen3:8b', whisper_device: 'cpu', mic_device: null, record_mode: 'toggle', mic_gain: 1, theme: 'dark', shuffle_due: false, ui_scale: 1 }
+  let settings: Settings = { ollama_host: 'localhost', ollama_port: 11434, llm_model: 'qwen3:8b', whisper_model: 'small', whisper_device: 'cpu', mic_device: null, record_mode: 'toggle', mic_gain: 1, theme: 'dark', shuffle_due: false, ui_scale: 1 }
   let mic = false
   let recStart: number | null = null
   let recCard: number | null = null
@@ -30,7 +30,13 @@ export function createMockApi(): PyApi {
   let heardReading: string | null = null
   const done = new Set<number>()
   let reviewId = 0
-  let dl = { state: 'idle' as 'idle' | 'downloading' | 'done' | 'error', bytes_done: 0, bytes_total: 485_000_000, error: null }
+  let dl = { state: 'idle' as 'idle' | 'downloading' | 'done' | 'error', model: null as string | null, bytes_done: 0, bytes_total: 485_000_000, error: null }
+  const whisperModels = [
+    { id: 'small', label: 'small', blurb: 'Fast on CPU. Weakest Japanese.', size_bytes: 485_000_000, installed: true, custom: false },
+    { id: 'medium', label: 'medium', blurb: 'Better Japanese than small; 2-3x slower on CPU.', size_bytes: 1_530_000_000, installed: false, custom: false },
+    { id: 'large-v3-turbo', label: 'large-v3-turbo', blurb: 'Near large-v3 Japanese. Best on GPU (~1.2GB VRAM); slow on CPU.', size_bytes: 1_620_000_000, installed: false, custom: false },
+    { id: 'large-v3', label: 'large-v3', blurb: 'Most accurate. Slow on CPU; needs ~2GB+ VRAM on GPU.', size_bytes: 3_090_000_000, installed: false, custom: false },
+  ]
 
   const counts = (deckId: number) => ({ new: cards.filter((c) => c.deck_id === deckId && !done.has(c.id)).length, learning: 0, review: 0 })
   const next = (deckId: number) => ({ card: cards.find((c) => c.deck_id === deckId && !done.has(c.id)) ?? null, counts: counts(deckId), next_learning_due_at: null })
@@ -38,9 +44,10 @@ export function createMockApi(): PyApi {
   const fail = (code: string, message: string) => Promise.resolve({ ok: false as const, error: { code, message } })
 
   const impl: Record<string, (...a: any[]) => Promise<any>> = {
-    get_status: () => ok({ whisper_state: dl.state === 'downloading' ? 'downloading' : 'ready', whisper_device: 'cpu', whisper_error: null, ollama_checked: true, ollama_reachable: true, llm_model: settings.llm_model, llm_model_present: true, mic_open: mic, mic_device: settings.mic_device, mic_fallback_used: false, setup_steps: [] }),
-    download_whisper_model: () => { dl = { ...dl, state: 'downloading' }; return ok(dl) },
-    get_download_status: () => { if (dl.state === 'downloading') { dl.bytes_done = Math.min(dl.bytes_total, dl.bytes_done + 40_000_000); if (dl.bytes_done >= dl.bytes_total) dl.state = 'done' } return ok(dl) },
+    get_status: () => ok({ whisper_state: whisperModels.find((m) => m.id === settings.whisper_model)?.installed ? 'ready' : dl.state === 'downloading' && dl.model === settings.whisper_model ? 'downloading' : 'missing', whisper_model: settings.whisper_model, whisper_model_downloadable: true, whisper_model_bytes: whisperModels.find((m) => m.id === settings.whisper_model)?.size_bytes ?? 0, whisper_device: 'cpu', whisper_error: null, ollama_checked: true, ollama_reachable: true, llm_model: settings.llm_model, llm_model_present: true, mic_open: mic, mic_device: settings.mic_device, mic_fallback_used: false, setup_steps: [] }),
+    download_whisper_model: (id?: string | null) => { const m = whisperModels.find((x) => x.id === (id ?? settings.whisper_model))!; dl = { ...dl, state: 'downloading', model: m.id, bytes_done: 0, bytes_total: m.size_bytes }; return ok(dl) },
+    list_whisper_models: () => ok(whisperModels),
+    get_download_status: () => { if (dl.state === 'downloading') { dl.bytes_done = Math.min(dl.bytes_total, dl.bytes_done + 120_000_000); if (dl.bytes_done >= dl.bytes_total) { dl.state = 'done'; const m = whisperModels.find((x) => x.id === dl.model); if (m) m.installed = true } } return ok(dl) },
     open_ollama_download_page: () => ok(),
     recheck_ollama: () => impl.get_status(),
     get_settings: () => ok(settings),

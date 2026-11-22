@@ -20,7 +20,7 @@ from audioflash import config, database  # noqa: E402
 from audioflash.audio import MicSession  # noqa: E402
 from audioflash.core import Core  # noqa: E402
 from audioflash.evaluator import OllamaClient  # noqa: E402
-from audioflash.model_setup import ModelDownloader  # noqa: E402
+from audioflash.model_setup import ModelDownloader, model_dir  # noqa: E402
 from audioflash.paths import DataPaths  # noqa: E402
 from audioflash.stt import WhisperService  # noqa: E402
 
@@ -82,9 +82,14 @@ class FakeWhisperModel:
         return iter(self.next_segments), None
 
 
-def install_fake_model_files(model_dir: Path) -> None:
+def small_dir(paths) -> Path:
+    """Folder of the default ("small") Whisper model."""
+    return model_dir(paths.models, config.DEFAULT_WHISPER_MODEL)
+
+
+def install_fake_model_files(model_dir: Path, model_id: str = config.DEFAULT_WHISPER_MODEL) -> None:
     model_dir.mkdir(parents=True, exist_ok=True)
-    for name, (size, _) in config.WHISPER_FILES.items():
+    for name, (size, _) in config.WHISPER_MODELS[model_id].files.items():
         with open(model_dir / name, "wb") as f:
             f.truncate(size)  # sparse file of the right size
 
@@ -96,8 +101,8 @@ def fake_model():
 
 @pytest.fixture
 def whisper(paths, fake_model):
-    install_fake_model_files(paths.whisper_model)
-    w = WhisperService(paths.whisper_model, factory=lambda path, device, ct: fake_model)
+    install_fake_model_files(small_dir(paths))
+    w = WhisperService(small_dir(paths), factory=lambda path, device, ct: fake_model)
     w.load("cpu")
     assert w.ready
     return w

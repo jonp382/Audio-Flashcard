@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterator
 
 import numpy as np
 
-from . import audio, config, database, deckfile, importer, reading_match, reviews, scheduler, srs
+from . import audio, config, database, deckfile, importer, model_setup, reading_match, reviews, scheduler, srs
 from .errors import AppError
 from .evaluator import CardContext, GradingFailed, LLMUnavailable, OllamaClient
 from .grading import grade_answer, grade_meaning
@@ -84,7 +84,9 @@ class Core:
     ):
         self.paths = paths
         self.clock = clock
-        self.whisper = whisper or WhisperService(paths.whisper_model)
+        with self.db() as conn:
+            s = database.get_settings(conn)
+        self.whisper = whisper or WhisperService(self.whisper_dir(s["whisper_model"]))
         self.ollama = ollama or OllamaClient()
         self.mic = mic or audio.MicSession()
         self.player = player or audio.Player()
@@ -108,8 +110,6 @@ class Core:
         self._session_deck: int | None = None
         self._shutdown = False
 
-        with self.db() as conn:
-            s = database.get_settings(conn)
         self.ollama.configure(s["ollama_host"], s["ollama_port"], s["llm_model"])
         self.mic.set_gain(s["mic_gain"])
         self._test_clip: np.ndarray | None = None
@@ -137,29 +137,48 @@ class Core:
         with self.db() as conn:
             return database.get_settings(conn)
 
+    def whisper_dir(self, model_id: str) -> Path:
+        return model_setup.model_dir(self.paths.models, model_id)
+
+    def _load_whisper_async(self) -> None:
+        s = self.settings()
+        self.whisper.load_async(s["whisper_device"], self.whisper_dir(s["whisper_model"]))
+
     def start_background(self) -> None:
         """Whisper load + ollama check. Must not block the window."""
-        self.whisper.load_async(self.settings()["whisper_device"])
+        self._load_whisper_async()
         threading.Thread(target=self.ollama.check, name="ollama-check", daemon=True).start()
 
-    def _after_download(self) -> None:
-        self.whisper.load(self.settings()["whisper_device"])
+    def _after_download(self, model_id: str) -> None:
+        s = self.settings()
+        if s["whisper_model"] == model_id:  # only (re)load if it's the model in use
+            self.whisper.load(s["whisper_device"], self.whisper_dir(model_id))
 
     # --- status & setup ----------------------------------------------------------------
 
     def get_status(self) -> dict[str, Any]:
         w = self.whisper.snapshot()
-        state = "downloading" if self.downloader.running else w["state"]
+        s = self.settings()
+        model_id = s["whisper_model"]
+        state = w["state"]
+        if state == "missing" and self.downloader.running_model == model_id:
+            state = "downloading"
         st = self.ollama.status
         steps: list[str] = []
         if state in ("missing", "downloading"):
-            steps.append("Download the speech model (about 480MB, once).")
+            size = model_setup.model_size_bytes(model_id)
+            if size:
+                steps.append(f"Download the speech model ({model_id}, about {round(size / 1e6, -1):.0f}MB, once).")
+            else:
+                steps.append(f"The speech model folder models/{model_id} is missing; pick another model in Settings.")
         if state == "error":
             steps.append(f"The speech model failed to load: {w['error']}")
         steps += self.ollama.setup_steps()
-        s = self.settings()
         return {
             "whisper_state": state,
+            "whisper_model": model_id,
+            "whisper_model_downloadable": model_id in config.WHISPER_MODELS,
+            "whisper_model_bytes": model_setup.model_size_bytes(model_id),
             "whisper_device": w["device"],
             "whisper_error": w["error"],
             "ollama_checked": st.checked,
@@ -172,10 +191,16 @@ class Core:
             "setup_steps": steps,
         }
 
-    def download_whisper_model(self) -> dict[str, Any]:
-        if not self.downloader.start():
-            raise AppError("busy", "The download is already running")
+    def download_whisper_model(self, model_id: str | None = None) -> dict[str, Any]:
+        model_id = model_id or self.settings()["whisper_model"]
+        if model_id not in config.WHISPER_MODELS:
+            raise AppError("invalid_input", f"{model_id!r} is not a model the app can download")
+        if not self.downloader.start(model_id):
+            raise AppError("busy", "A download is already running")
         return self.downloader.status()
+
+    def list_whisper_models(self) -> list[dict]:
+        return model_setup.list_models(self.paths.models)
 
     def get_download_status(self) -> dict[str, Any]:
         return self.downloader.status()
@@ -194,6 +219,8 @@ class Core:
 
     def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         clean = validate_settings_patch(patch)
+        if "whisper_model" in clean and not model_setup.valid_model_id(self.paths.models, clean["whisper_model"]):
+            raise AppError("invalid_input", f"unknown speech model {clean['whisper_model']!r}")
         with self.db() as conn:
             database.set_settings(conn, clean)
             s = database.get_settings(conn)
@@ -202,8 +229,8 @@ class Core:
             threading.Thread(target=self.ollama.check, name="ollama-check", daemon=True).start()
         if "mic_gain" in clean:
             self.mic.set_gain(s["mic_gain"])
-        if "whisper_device" in clean:
-            self.whisper.load_async(s["whisper_device"])
+        if {"whisper_device", "whisper_model"} & clean.keys():
+            self.whisper.load_async(s["whisper_device"], self.whisper_dir(s["whisper_model"]))
         if "mic_device" in clean and self.mic.is_open and not self.mic.recording:
             self.mic.close()
             try:
@@ -1107,7 +1134,7 @@ def validate_settings_patch(patch: Any) -> dict[str, Any]:
     for k, v in patch.items():
         if k not in config.DEFAULT_SETTINGS:
             raise AppError("invalid_input", f"unknown setting {k!r}")
-        if k in ("ollama_host", "llm_model"):
+        if k in ("ollama_host", "llm_model", "whisper_model"):
             out[k] = _req_str(v, k)
         elif k == "ollama_port":
             if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 65535:

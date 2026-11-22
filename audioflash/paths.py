@@ -28,10 +28,6 @@ class DataPaths:
         return self.root / "models"
 
     @property
-    def whisper_model(self) -> Path:
-        return self.models / config.WHISPER_DIR_NAME
-
-    @property
     def recordings(self) -> Path:
         return self.root / "recordings"
 

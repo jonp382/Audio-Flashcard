@@ -96,30 +96,42 @@ class WhisperService:
         with self._lock:
             return {"state": self.state, "device": self.device, "error": self.error}
 
+    @property
+    def loaded_dir(self):
+        """Folder of the model currently loaded (or being loaded)."""
+        with self._lock:
+            return self.model_dir
+
     def set_downloading(self) -> None:
         with self._lock:
             if self.state != "ready":
                 self.state = "downloading"
 
-    def load(self, device: str = "cpu") -> None:
-        """Blocking load (call from a background thread). CUDA failure falls back to CPU."""
+    def load(self, device: str = "cpu", model_dir=None) -> None:
+        """Blocking load (call from a background thread). CUDA failure falls back to CPU.
+
+        ``model_dir`` switches to another model folder (the whisper_model setting)."""
         with self._lock:
             self._generation += 1
             gen = self._generation
-            if not model_present(self.model_dir):
+            if model_dir is not None:
+                self.model_dir = model_dir
+            path = self.model_dir
+            if not model_present(path):
                 self.state, self._model, self.error = "missing", None, None
                 return
-            self.state, self.error = "loading", None
+            # Drop the old model first so two large models are never in (V)RAM at once.
+            self.state, self.error, self._model = "loading", None, None
         model, used, err = None, "cpu", None
         if device == "cuda":
             try:
-                model = self._factory(str(self.model_dir), "cuda", "int8_float16")
+                model = self._factory(str(path), "cuda", "int8_float16")
                 used = "cuda"
             except Exception as e:  # missing cuBLAS/cuDNN etc.
                 log.warning("CUDA Whisper init failed, falling back to CPU: %s", e)
         if model is None:
             try:
-                model = self._factory(str(self.model_dir), "cpu", "int8")
+                model = self._factory(str(path), "cpu", "int8")
             except Exception as e:
                 log.exception("Whisper load failed")
                 err = str(e)
@@ -131,8 +143,8 @@ class WhisperService:
             self.state = "ready" if model is not None else "error"
             self.error = err
 
-    def load_async(self, device: str = "cpu") -> threading.Thread:
-        t = threading.Thread(target=self.load, args=(device,), name="whisper-load", daemon=True)
+    def load_async(self, device: str = "cpu", model_dir=None) -> threading.Thread:
+        t = threading.Thread(target=self.load, args=(device, model_dir), name="whisper-load", daemon=True)
         t.start()
         return t
 

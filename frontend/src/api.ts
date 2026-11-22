@@ -90,6 +90,9 @@ export type WhisperState = 'missing' | 'downloading' | 'loading' | 'ready' | 'er
 
 export interface Status {
   whisper_state: WhisperState
+  whisper_model: string // id of the model in use (the whisper_model setting)
+  whisper_model_downloadable: boolean // false for a custom folder the user added themselves
+  whisper_model_bytes: number // download size; 0 for custom models
   whisper_device: 'cpu' | 'cuda'
   whisper_error: string | null
   ollama_checked: boolean
@@ -104,6 +107,7 @@ export interface Status {
 
 export interface DownloadStatus {
   state: 'idle' | 'downloading' | 'done' | 'error'
+  model: string | null
   bytes_done: number
   bytes_total: number
   error: string | null
@@ -113,6 +117,7 @@ export interface Settings {
   ollama_host: string
   ollama_port: number
   llm_model: string
+  whisper_model: string
   whisper_device: 'cpu' | 'cuda'
   mic_device: string | null
   record_mode: 'toggle' | 'hold'
@@ -120,6 +125,15 @@ export interface Settings {
   theme: Theme
   shuffle_due: boolean // due cards in random order (new cards keep their order)
   ui_scale: number // interface scale, 1 = 100%
+}
+
+export interface WhisperModelInfo {
+  id: string
+  label: string
+  blurb: string
+  size_bytes: number
+  installed: boolean
+  custom: boolean // a folder the user put in models/ themselves
 }
 
 export type Theme = 'dark' | 'light' | 'system'
@@ -322,7 +336,8 @@ async function call<T>(method: string, ...args: unknown[]): Promise<T> {
 export const api = {
   // status & setup
   getStatus: () => call<Status>('get_status'),
-  downloadWhisperModel: () => call<DownloadStatus>('download_whisper_model'),
+  downloadWhisperModel: (modelId?: string) => call<DownloadStatus>('download_whisper_model', modelId ?? null),
+  listWhisperModels: () => call<WhisperModelInfo[]>('list_whisper_models'),
   getDownloadStatus: () => call<DownloadStatus>('get_download_status'),
   openOllamaDownloadPage: () => call<null>('open_ollama_download_page'),
   recheckOllama: () => call<Status>('recheck_ollama'),
